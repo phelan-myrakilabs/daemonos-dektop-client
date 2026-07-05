@@ -90,17 +90,39 @@ extension View {
 private struct ToastStackView: View {
     @Environment(ToastCenter.self) private var toasts
     @Environment(\.hermesTheme) private var theme
+    @State private var expanded = false
 
     var body: some View {
+        // Newest toast shows by default; a footer expands the rest and offers
+        // clear-all (reference `components/notifications.tsx`).
+        let all = toasts.toasts
+        let shown = expanded ? all : Array(all.suffix(1))
+        let hiddenCount = all.count - shown.count
+
         VStack(spacing: 8) {
-            ForEach(toasts.toasts) { toast in
+            ForEach(shown) { toast in
                 ToastRowView(toast: toast)
+            }
+            if all.count > 1 {
+                HStack(spacing: 12) {
+                    Button(expanded ? "Hide \(hiddenCount == 0 ? all.count - 1 : hiddenCount) more" : "Show \(all.count - 1) more") {
+                        withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+                    }
+                    Spacer(minLength: 8)
+                    Button("Clear all") { toasts.clearAll(); expanded = false }
+                }
+                .font(.system(size: 11))
+                .buttonStyle(.plain)
+                .foregroundStyle(theme.textTertiary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
             }
         }
         .frame(maxWidth: 512)
         .padding(.horizontal, 16)
         .padding(.top, HermesTheme.titlebarHeight + 12)
-        .allowsHitTesting(!toasts.toasts.isEmpty)
+        .allowsHitTesting(!all.isEmpty)
+        .onChange(of: all.count) { if all.count <= 1 { expanded = false } }
     }
 }
 

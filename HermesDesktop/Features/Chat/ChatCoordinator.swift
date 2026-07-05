@@ -13,6 +13,10 @@ final class ChatCoordinator {
     /// Stored (durable) session id of the active session; nil for a fresh draft.
     private(set) var activeSessionID: String?
     private(set) var activeViewModel: ChatSessionViewModel?
+    /// Bumped on every EXPLICIT navigation (openSession / startNewSession) so the
+    /// shell can return to the chat route. Unlike activeSessionID, this does not
+    /// fire when a draft's first send flips nil→stored (no navigation intent there).
+    private(set) var navigationEpoch = 0
 
     @ObservationIgnored private var sessionViewModels: [String: ChatSessionViewModel] = [:]
     @ObservationIgnored private var eventPump: Task<Void, Never>?
@@ -30,6 +34,7 @@ final class ChatCoordinator {
     private var mode: ConnectionMode { model.connectionStore.settings.mode }
 
     func openSession(_ session: SessionInfo) {
+        navigationEpoch &+= 1
         activeSessionID = session.id
         if let cached = sessionViewModels[session.id] {
             activeViewModel = cached
@@ -49,6 +54,7 @@ final class ChatCoordinator {
 
     /// Clears to a local draft — no RPC until the first send (reference behavior).
     func startNewSession() {
+        navigationEpoch &+= 1
         let viewModel = makeViewModel(session: nil)
         configure(viewModel)
         activeViewModel = viewModel

@@ -184,9 +184,15 @@ final class SkillsToolsStore {
             .sorted { Self.displayLabel(for: $0) < Self.displayLabel(for: $1) }
     }
 
+    /// All non-hidden toolsets (unfiltered by the search query) — the curated set
+    /// the badge/footer counts should reflect, so they match the rendered rows.
+    private var curatedToolsets: [ToolsetInfo] {
+        (toolsets ?? []).filter { !Self.hiddenToolsets.contains($0.name) }
+    }
+
     var totalSkills: Int { skills?.count ?? 0 }
-    var enabledToolsetCount: Int { toolsets?.filter(\.enabled).count ?? 0 }
-    var totalToolsets: Int { toolsets?.count ?? 0 }
+    var enabledToolsetCount: Int { curatedToolsets.filter(\.enabled).count }
+    var totalToolsets: Int { curatedToolsets.count }
 
     // MARK: - Labels (reference `helpers.ts`)
 

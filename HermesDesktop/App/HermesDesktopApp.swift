@@ -6,6 +6,9 @@ struct HermesDesktopApp: App {
     @State private var themeStore = ThemeStore()
     @State private var overlays = OverlayCoordinator()
     @State private var toasts = ToastCenter()
+    @State private var onboarding = OnboardingState()
+    @State private var sessionSwitcher = SessionSwitcherPresenter()
+    @State private var keybinds = KeybindsPanelPresenter()
     @State private var chatCoordinator: ChatCoordinator?
 
     var body: some Scene {
@@ -23,6 +26,9 @@ struct HermesDesktopApp: App {
             .environment(themeStore)
             .environment(overlays)
             .environment(toasts)
+            .environment(onboarding)
+            .environment(sessionSwitcher)
+            .environment(keybinds)
             .environment(\.hermesTheme, themeStore.theme)
             .background(TrafficLightPositioner())
             .task { model.boot.start() }

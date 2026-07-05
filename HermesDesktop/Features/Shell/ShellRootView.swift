@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Observation
 
@@ -22,6 +23,14 @@ final class ShellLayoutState {
         }
     }
 
+    /// Any explicit chat action (open a session, new chat) returns the center pane
+    /// to the chat surface. Called from the sidebar rows, palette, and switcher so
+    /// route control is deliberate — not a side effect of activeSessionID changing
+    /// (a draft's first send flips that nil→stored without a navigation intent).
+    func showChat() {
+        route = .chat
+    }
+
     /// Reference `session.focusSearch` opens the sidebar first, then focuses.
     func focusSessionSearch() {
         if !sidebarVisible {
@@ -39,8 +48,12 @@ struct ShellRootView: View {
     @Environment(ChatCoordinator.self) private var chat
     @Environment(ThemeStore.self) private var themeStore
     @Environment(OverlayCoordinator.self) private var overlays
+    @Environment(OnboardingState.self) private var onboarding
+    @Environment(SessionSwitcherPresenter.self) private var switcher
+    @Environment(KeybindsPanelPresenter.self) private var keybinds
 
     @State private var shell = ShellLayoutState()
+    @State private var keyMonitor: Any?
 
     var body: some View {
         let theme = themeStore.theme
@@ -66,9 +79,17 @@ struct ShellRootView: View {
         }
         .background(theme.appBackground)
         .overlay { OverlayHostView() }
+        .overlay { SessionSwitcherView() }
+        .overlay { KeybindsPanelView() }
         .overlay {
             if model.boot.bootProgress.visible {
                 BootOverlayView()
+                    .transition(.opacity)
+            }
+        }
+        .overlay {
+            if onboarding.shouldShow {
+                OnboardingView()
                     .transition(.opacity)
             }
         }
@@ -84,10 +105,14 @@ struct ShellRootView: View {
             toggleAppearance: { themeStore.toggleMode() }
         ))
         .background(searchFocusShortcut)
-        .onChange(of: chat.activeSessionID) {
-            // Opening a session from anywhere (sidebar, palette, picker) returns
-            // the center pane to the chat surface.
+        .onChange(of: chat.navigationEpoch) {
+            // Any explicit open/new-chat action returns the center pane to chat.
             shell.route = .chat
+        }
+        .onAppear { installKeyMonitor() }
+        .onDisappear {
+            if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+            keyMonitor = nil
         }
     }
 
@@ -119,7 +144,7 @@ struct ShellRootView: View {
         }
     }
 
-    /// Hidden shortcut triggers: ⌘⇧F sidebar search, ⌘K/⌘P command palette.
+    /// Hidden shortcut triggers: ⌘⇧F sidebar search, ⌘K/⌘P command palette, ⌘/ keybinds.
     private var searchFocusShortcut: some View {
         Group {
             Button("") { shell.focusSessionSearch() }
@@ -128,9 +153,57 @@ struct ShellRootView: View {
                 .keyboardShortcut("k", modifiers: .command)
             Button("") { overlays.toggle(.commandPalette) }
                 .keyboardShortcut("p", modifiers: .command)
+            Button("") { keybinds.toggle() }
+                .keyboardShortcut("/", modifiers: .command)
         }
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
+    }
+
+    /// The recent sessions the ⌃Tab switcher cycles (capped to match the HUD).
+    private var switcherSessions: [SessionInfo] {
+        Array(model.sessionList.sessions.prefix(SessionSwitcherPresenter.maxRows))
+    }
+
+    /// ⌃Tab session switcher: SwiftUI shortcuts can't express "hold Ctrl, release
+    /// commits," so a local event monitor drives it. ⌃Tab shows/advances (⌃⇧Tab
+    /// reverses), ⌃1–9 jumps directly, and releasing Ctrl opens the selection.
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+            switch event.type {
+            case .keyDown where event.modifierFlags.contains(.control):
+                if event.keyCode == 48 { // Tab
+                    let sessions = switcherSessions
+                    guard !sessions.isEmpty else { return event }
+                    if !switcher.isPresented {
+                        switcher.begin(sessionCount: sessions.count)
+                    } else if event.modifierFlags.contains(.shift) {
+                        switcher.prev()
+                    } else {
+                        switcher.next()
+                    }
+                    return nil // swallow so focus doesn't tab away
+                }
+                if switcher.isPresented,
+                   let digit = Int(event.charactersIgnoringModifiers ?? ""), (1...9).contains(digit) {
+                    let sessions = switcherSessions
+                    if let index = switcher.select(slot: digit), sessions.indices.contains(index) {
+                        chat.openSession(sessions[index])
+                    }
+                    return nil
+                }
+                return event
+            case .flagsChanged where switcher.isPresented && !event.modifierFlags.contains(.control):
+                let sessions = switcherSessions
+                if let index = switcher.confirm(), sessions.indices.contains(index) {
+                    chat.openSession(sessions[index])
+                }
+                return event
+            default:
+                return event
+            }
+        }
     }
 }

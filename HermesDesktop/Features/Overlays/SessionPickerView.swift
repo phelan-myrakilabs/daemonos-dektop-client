@@ -29,19 +29,29 @@ struct SessionPickerView: View {
                     .padding(.vertical, 22)
                     .frame(maxWidth: .infinity)
             } else {
-                ScrollView {
-                    VStack(spacing: 1) {
-                        ForEach(Array(rows.enumerated()), id: \.element.id) { index, session in
-                            row(session, isSelected: index == selectionIndex)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 1) {
+                            ForEach(Array(rows.enumerated()), id: \.element.id) { index, session in
+                                row(session, isSelected: index == selectionIndex)
+                                    .id(session.id)
+                            }
+                        }
+                        .padding(6)
+                    }
+                    .frame(maxHeight: 360)
+                    .onChange(of: selectionIndex) {
+                        if rows.indices.contains(selectionIndex) {
+                            withAnimation(.easeOut(duration: 0.12)) {
+                                proxy.scrollTo(rows[selectionIndex].id, anchor: .center)
+                            }
                         }
                     }
-                    .padding(6)
                 }
-                .frame(maxHeight: 360)
             }
         }
         .overlayPanelChrome(width: 560)
-        .onAppear { searchFocused = true }
+        .onAppear { DispatchQueue.main.async { searchFocused = true } }
         .onChange(of: query) { selectionIndex = 0 }
     }
 

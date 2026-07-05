@@ -39,22 +39,35 @@ struct CommandPaletteView: View {
                     .padding(.vertical, 18)
                     .frame(maxWidth: .infinity)
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(sections, id: \.title) { section in
-                            sectionHeader(section.title)
-                            ForEach(section.items) { item in
-                                row(item, isSelected: flat.firstIndex(where: { $0.id == item.id }) == selectionIndex)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(sections, id: \.title) { section in
+                                sectionHeader(section.title)
+                                ForEach(section.items) { item in
+                                    row(item, isSelected: flat.firstIndex(where: { $0.id == item.id }) == selectionIndex)
+                                        .id(item.id)
+                                }
+                            }
+                        }
+                        .padding(6)
+                    }
+                    .frame(maxHeight: 320)
+                    .onChange(of: selectionIndex) {
+                        // Keep the highlighted row visible under arrow-key navigation.
+                        if flat.indices.contains(selectionIndex) {
+                            withAnimation(.easeOut(duration: 0.12)) {
+                                proxy.scrollTo(flat[selectionIndex].id, anchor: .center)
                             }
                         }
                     }
-                    .padding(6)
                 }
-                .frame(maxHeight: 320)
             }
         }
         .overlayPanelChrome(width: 520)
-        .onAppear { searchFocused = true }
+        // Defer focus to the next runloop tick — a synchronous set in onAppear lands
+        // before the field is in the responder chain and silently no-ops.
+        .onAppear { DispatchQueue.main.async { searchFocused = true } }
         .onChange(of: query) { selectionIndex = 0 }
     }
 

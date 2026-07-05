@@ -227,7 +227,16 @@ final class GatewayBootController {
 
         if gatewayGated == nil {
             let status = try? await rest.request("/api/status", authenticated: false, as: StatusResponse.self)
-            if let status { gatewayGated = status.authRequired == true }
+            if let status {
+                gatewayGated = status.authRequired == true
+            } else if (try? await auth.me(baseURL: base)) != nil {
+                // The probe failed transiently, but a live cookie session means the
+                // gateway is gated — don't fall through to the token branch and
+                // surface a misleading "no token saved" error while signed in.
+                gatewayGated = true
+            }
+            // Otherwise leave gatewayGated nil (undetermined): re-probe next attempt
+            // rather than committing to the ungated branch on a transient failure.
         }
 
         if gatewayGated == true {
@@ -241,7 +250,9 @@ final class GatewayBootController {
         }
 
         guard let token = connectionStore.token(), !token.isEmpty else {
-            throw HermesAPIError(message: "Remote Hermes gateway is selected, but no session token is saved. Open Settings → Gateway and save a token, or switch back to Local.")
+            // gatewayGated still nil (probe failed, no cookie session) OR genuinely
+            // ungated with no token: point the user at sign-in, which is the likely fix.
+            throw HermesAPIError(message: Self.signInRequiredMessage, statusCode: 401)
         }
         return try connectionStore.settings.webSocketURL(token: token)
     }
@@ -373,7 +384,10 @@ final class GatewayBootController {
         }
         reconnecting = false
         if gatewayState != .open {
-            if reconnectAttempt >= Self.reconnectEscalateAfter && !escalated {
+            // Don't overwrite the actionable "sign in" overlay with a generic
+            // connectivity message — a gated session that expired needs the user
+            // in Settings → Account, not a "lost connection" dead end.
+            if reconnectAttempt >= Self.reconnectEscalateAfter && !escalated && !reauthNotified {
                 escalated = true
                 failBoot("Lost connection to the gateway")
             }

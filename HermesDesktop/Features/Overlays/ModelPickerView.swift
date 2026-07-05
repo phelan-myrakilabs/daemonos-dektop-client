@@ -171,8 +171,10 @@ struct ModelPickerView: View {
             return
         }
         do {
-            // Reference: getGlobalModelOptions sends refresh=1.
-            let response = try await model.rest.request("/api/model/options?refresh=1",
+            // Use the cached catalog on open (reference keeps the 1h cache for normal
+            // opens); refresh=1 is reserved for an explicit user-triggered refresh so
+            // opening the picker doesn't re-fetch every provider's live catalog.
+            let response = try await model.rest.request("/api/model/options",
                                                         timeout: HermesRESTClient.startupTimeout,
                                                         as: ModelOptionsResponse.self)
             phase = .loaded(response)
