@@ -11,6 +11,9 @@ struct GatewaySettingsView: View {
     @State private var wsDraft = ""
     @State private var tokenDraft = ""
     @State private var modeDraft: ConnectionMode = .v1
+    @State private var usernameDraft = ""
+    @State private var passwordDraft = ""
+    @State private var signingIn = false
     @State private var validationError: String?
     @State private var didSave = false
     @State private var loadedDrafts = false
@@ -59,7 +62,13 @@ struct GatewaySettingsView: View {
                 .padding(.bottom, 6)
             SecureField("", text: $tokenDraft, prompt: Text("Paste a \(modeDraft.credentialLabel.lowercased()) to replace the saved one"))
                 .settingsFieldChrome(theme)
-            footnote(tokenStatusLabel)
+            footnote(modeDraft == .gateway
+                ? "\(tokenStatusLabel) · Only used when the gateway runs ungated; the current deployment is auth-gated — sign in below instead."
+                : tokenStatusLabel)
+
+            if modeDraft == .gateway {
+                accountSection
+            }
 
             if validationError != nil || tester.phase != .idle {
                 feedback
@@ -84,7 +93,18 @@ struct GatewaySettingsView: View {
         .onChange(of: restDraft) { clearFeedback() }
         .onChange(of: wsDraft) { clearFeedback() }
         .onChange(of: tokenDraft) { clearFeedback() }
-        .onChange(of: modeDraft) { clearFeedback() }
+        .onChange(of: modeDraft) { _, newMode in
+            clearFeedback()
+            // Swap the prefilled base URL when the user hasn't customized it —
+            // the two modes live on different hostnames in this deployment.
+            let v1Default = ConnectionSettings.defaultRESTBaseURL
+            let gatewayDefault = ConnectionSettings.defaultGatewayRESTBaseURL
+            if newMode == .gateway, restDraft == v1Default {
+                restDraft = gatewayDefault
+            } else if newMode == .v1, restDraft == gatewayDefault {
+                restDraft = v1Default
+            }
+        }
     }
 
     // MARK: - Subviews
@@ -118,6 +138,53 @@ struct GatewaySettingsView: View {
 
     private var tokenStatusLabel: String {
         model.connectionStore.tokenPreview.map { "Current: \($0)" } ?? "No token saved"
+    }
+
+    /// Gated-gateway sign-in. Credentials are used once (POST /auth/password-login)
+    /// and never persisted — the session lives in HttpOnly cookies.
+    @ViewBuilder
+    private var accountSection: some View {
+        SettingsSectionHeader("Account")
+            .padding(.top, 16)
+            .padding(.bottom, 6)
+        if let identity = model.boot.authIdentity {
+            HStack(spacing: 8) {
+                Image(systemName: "person.crop.circle.badge.checkmark")
+                    .font(.system(size: 13))
+                    .foregroundStyle(theme.statusSuccess)
+                Text("Signed in as \(identity)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(theme.textSecondary)
+                Spacer()
+                Button("Sign out") {
+                    Task { await model.boot.signOut() }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        } else {
+            TextField("", text: $usernameDraft, prompt: Text("Username"))
+                .settingsFieldChrome(theme)
+            SecureField("", text: $passwordDraft, prompt: Text("Password"))
+                .settingsFieldChrome(theme)
+                .padding(.top, 6)
+                .onSubmit(signIn)
+            HStack(spacing: 8) {
+                Button(action: signIn) {
+                    if signingIn {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Sign in")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(theme.accent)
+                .disabled(signingIn || usernameDraft.trimmingCharacters(in: .whitespaces).isEmpty || passwordDraft.isEmpty)
+                Spacer()
+            }
+            .padding(.top, 8)
+            footnote("The gateway runs auth-gated: sign in with your dashboard username and password. The password is used once and never stored; your session lives in secure cookies.")
+        }
     }
 
     @ViewBuilder
@@ -195,6 +262,33 @@ struct GatewaySettingsView: View {
     }
 
     private func save() {
+        guard applyDrafts() else { return }
+        didSave = true
+        model.boot.retryBoot()
+    }
+
+    /// Sign in to a gated gateway: apply the endpoint drafts first, then log in
+    /// (which re-boots on success).
+    private func signIn() {
+        guard applyDrafts() else { return }
+        let username = usernameDraft.trimmingCharacters(in: .whitespaces)
+        let password = passwordDraft
+        signingIn = true
+        Task {
+            defer { signingIn = false }
+            do {
+                try await model.boot.signIn(username: username, password: password)
+                passwordDraft = ""
+                didSave = true
+            } catch {
+                validationError = error.localizedDescription
+            }
+        }
+    }
+
+    /// Validates + persists the endpoint/credential drafts. No reboot; returns
+    /// false (with validationError set) when invalid.
+    private func applyDrafts() -> Bool {
         validationError = nil
         didSave = false
 
@@ -206,26 +300,27 @@ struct GatewaySettingsView: View {
             _ = try ConnectionSettings.normalizeRESTBaseURL(rest)
         } catch {
             validationError = error.localizedDescription
-            return
+            return false
         }
 
         let draft = ConnectionSettings(restBaseURLString: rest, wsURLString: ws, authMode: .token, mode: modeDraft)
 
         // Reference save-time coercion: a new non-empty credential replaces the stored
-        // secret, otherwise the existing one is inherited; neither → hard error.
+        // secret, otherwise the existing one is inherited. v1 mode hard-requires a
+        // key; gateway mode doesn't (a gated gateway authenticates via cookies).
         let effectiveToken = newToken.isEmpty ? (model.connectionStore.token() ?? "") : newToken
-        guard !effectiveToken.isEmpty else {
+        if modeDraft == .v1, effectiveToken.isEmpty {
             validationError = "\(modeDraft.credentialLabel) is required."
-            return
+            return false
         }
 
         // The WS URL only matters in gateway mode; validate it there.
         if modeDraft == .gateway {
             do {
-                _ = try draft.webSocketURL(token: effectiveToken)
+                _ = try draft.webSocketURL(token: effectiveToken.isEmpty ? "placeholder" : effectiveToken)
             } catch {
                 validationError = error.localizedDescription
-                return
+                return false
             }
         }
 
@@ -235,13 +330,12 @@ struct GatewaySettingsView: View {
                 try model.connectionStore.setToken(newToken)
             } catch {
                 validationError = "Could not save the session token: \(error.localizedDescription)"
-                return
+                return false
             }
             tokenDraft = ""
         }
 
-        didSave = true
-        model.boot.retryBoot()
+        return true
     }
 }
 

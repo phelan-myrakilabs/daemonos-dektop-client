@@ -40,6 +40,7 @@ final class GatewayBootController {
     private let gateway: GatewayClient
     private let rest: HermesRESTClient
     private let v1: V1ChatClient
+    private let auth = DashboardAuthClient()
     private let sessionList: SessionListStore
 
     private(set) var bootProgress: BootProgress = .initial
@@ -53,6 +54,15 @@ final class GatewayBootController {
     private(set) var v1Ready = false
     /// Backend version reported by `/health` (v1) — surfaced in the status bar.
     private(set) var serverVersion: String?
+
+    /// Gateway mode: whether the deployment is auth-gated (`auth_required` in
+    /// /api/status). nil until probed; reset when settings change.
+    private(set) var gatewayGated: Bool?
+    /// Signed-in identity (gated gateway) — shown in Settings.
+    private(set) var authIdentity: String?
+    private var reauthNotified = false
+
+    static let signInRequiredMessage = "The gateway requires sign-in. Open Settings → Gateway and sign in with your username and password."
 
     var mode: ConnectionMode { connectionStore.settings.mode }
 
@@ -130,6 +140,8 @@ final class GatewayBootController {
         bootCompleted = false
         escalated = false
         v1Ready = false
+        gatewayGated = nil // re-probe: mode/endpoint may have changed
+        reauthNotified = false
         reconnectAttempt = 0
         reconnectTimer?.cancel()
         reconnectTimer = nil
@@ -163,23 +175,18 @@ final class GatewayBootController {
     private func boot() async {
         setBootStep(phase: "renderer.boot", message: "Starting desktop connection", progress: 6)
 
-        if connectionStore.needsSetup {
-            let noun = mode.credentialLabel.lowercased()
-            failBoot("No \(noun) saved. Open Settings → Gateway and save your \(noun).")
-            return
-        }
-
         if mode == .v1 {
+            if connectionStore.needsSetup {
+                failBoot("No API key saved. Open Settings → Gateway and save your API key.")
+                return
+            }
             await bootV1()
             return
         }
 
         do {
             setBootStep(phase: "renderer.gateway.connect", message: "Connecting live desktop gateway", progress: 95)
-            guard let token = connectionStore.token(), !token.isEmpty else {
-                throw HermesAPIError(message: "Remote Hermes gateway is selected, but no session token is saved. Open Settings → Gateway and save a token, or switch back to Local.")
-            }
-            let wsURL = try connectionStore.settings.webSocketURL(token: token)
+            let wsURL = try await mintGatewayWSURL()
             try await gateway.connect(url: wsURL)
             if Task.isCancelled { return } // superseded by a newer retryBoot
 
@@ -207,6 +214,74 @@ final class GatewayBootController {
             if Task.isCancelled { return } // superseded boot: don't clobber the new attempt
             failBoot(error.localizedDescription)
         }
+    }
+
+    /// Resolves the WS URL for gateway mode, minting fresh auth every call
+    /// (the analog of the reference's resolveGatewayWsUrl, called before EVERY
+    /// connect). Ungated → long-lived `?token=` from the Keychain. Gated →
+    /// cookie-session check + single-use `?ticket=`; a missing session throws the
+    /// sign-in-required message (never falls back to a stale URL — reference
+    /// oauth-branch semantics).
+    private func mintGatewayWSURL() async throws -> URL {
+        let base = try ConnectionSettings.normalizeRESTBaseURL(connectionStore.settings.restBaseURLString)
+
+        if gatewayGated == nil {
+            let status = try? await rest.request("/api/status", authenticated: false, as: StatusResponse.self)
+            if let status { gatewayGated = status.authRequired == true }
+        }
+
+        if gatewayGated == true {
+            guard let session = try await auth.me(baseURL: base) else {
+                authIdentity = nil
+                throw HermesAPIError(message: Self.signInRequiredMessage, statusCode: 401)
+            }
+            authIdentity = session.displayName
+            let ticket = try await auth.mintWSTicket(baseURL: base)
+            return try connectionStore.settings.webSocketURL(ticket: ticket)
+        }
+
+        guard let token = connectionStore.token(), !token.isEmpty else {
+            throw HermesAPIError(message: "Remote Hermes gateway is selected, but no session token is saved. Open Settings → Gateway and save a token, or switch back to Local.")
+        }
+        return try connectionStore.settings.webSocketURL(token: token)
+    }
+
+    /// Sign in against the gated gateway's password provider. Credentials are used
+    /// once and never persisted — the session lives in HttpOnly cookies.
+    func signIn(username: String, password: String) async throws {
+        let base = try ConnectionSettings.normalizeRESTBaseURL(connectionStore.settings.restBaseURLString)
+        let provider = await passwordProviderName(baseURL: base)
+        try await auth.login(baseURL: base, provider: provider, username: username, password: password)
+        authIdentity = (try? await auth.me(baseURL: base))?.displayName ?? "signed in"
+        reauthNotified = false
+        retryBoot()
+    }
+
+    func signOut() async {
+        if let base = try? ConnectionSettings.normalizeRESTBaseURL(connectionStore.settings.restBaseURLString) {
+            await auth.logout(baseURL: base)
+        }
+        authIdentity = nil
+        retryBoot()
+    }
+
+    /// First registered password-capable provider (public endpoint); "basic" fallback.
+    private func passwordProviderName(baseURL: URL) async -> String {
+        struct Providers: Decodable {
+            struct Provider: Decodable {
+                let name: String?
+                let supports_password: Bool?
+            }
+            let providers: [Provider]
+        }
+        var request = URLRequest(url: URL(string: baseURL.absoluteString + "/api/auth/providers") ?? baseURL)
+        request.timeoutInterval = 8
+        if let (data, _) = try? await URLSession.shared.data(for: request),
+           let list = try? JSONDecoder().decode(Providers.self, from: data),
+           let match = list.providers.first(where: { $0.supports_password == true })?.name {
+            return match
+        }
+        return "basic"
     }
 
     /// v1 boot: probe `/health` (no persistent socket). Sessions are client-side, so
@@ -246,6 +321,7 @@ final class GatewayBootController {
         case .open:
             reconnectAttempt = 0
             escalated = false
+            reauthNotified = false
             reconnectTimer?.cancel()
             reconnectTimer = nil
             if bootCompleted {
@@ -278,19 +354,22 @@ final class GatewayBootController {
         guard !reconnecting, gatewayState != .open else { return }
         reconnecting = true
         do {
-            // Re-derive the endpoint from current settings every attempt (the analog
-            // of revalidate + getConnection + re-mint in the reference).
-            guard let token = connectionStore.token(), !token.isEmpty else {
-                throw HermesAPIError(message: "Remote Hermes gateway is selected, but no session token is saved. Open Settings → Gateway and save a token, or switch back to Local.")
-            }
-            let wsURL = try connectionStore.settings.webSocketURL(token: token)
+            // Re-derive the endpoint + re-mint auth from current settings every
+            // attempt (the analog of revalidate + getConnection + re-mint in the
+            // reference; single-use tickets make caching the URL always wrong).
+            let wsURL = try await mintGatewayWSURL()
             try await gateway.connect(url: wsURL)
             reconnectAttempt = 0
             // Best-effort resync of state that moved while disconnected.
             await refreshConfig()
             try? await sessionList.refresh(profile: activeProfile)
         } catch {
-            // Transport errors are swallowed here; the backoff loop continues.
+            // Reauth surfaces once per disconnect episode; transport errors are
+            // swallowed and the backoff loop continues (reference behavior).
+            if (error as? HermesAPIError)?.statusCode == 401, !reauthNotified {
+                reauthNotified = true
+                failBoot(Self.signInRequiredMessage)
+            }
         }
         reconnecting = false
         if gatewayState != .open {
@@ -361,10 +440,7 @@ final class GatewayBootController {
         }
         let task = Task { [weak self] in
             guard let self else { throw GatewayError.notConnected }
-            guard let token = self.connectionStore.token(), !token.isEmpty else {
-                throw HermesAPIError(message: "Remote Hermes gateway is selected, but no session token is saved. Open Settings → Gateway and save a token, or switch back to Local.")
-            }
-            let wsURL = try self.connectionStore.settings.webSocketURL(token: token)
+            let wsURL = try await self.mintGatewayWSURL()
             try await self.gateway.connect(url: wsURL)
         }
         inFlightReconnect = task

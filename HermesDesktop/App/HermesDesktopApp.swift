@@ -4,6 +4,8 @@ import SwiftUI
 struct HermesDesktopApp: App {
     @State private var model = AppModel()
     @State private var themeStore = ThemeStore()
+    @State private var overlays = OverlayCoordinator()
+    @State private var toasts = ToastCenter()
     @State private var chatCoordinator: ChatCoordinator?
 
     var body: some Scene {
@@ -19,6 +21,8 @@ struct HermesDesktopApp: App {
             }
             .environment(model)
             .environment(themeStore)
+            .environment(overlays)
+            .environment(toasts)
             .environment(\.hermesTheme, themeStore.theme)
             .background(TrafficLightPositioner())
             .task { model.boot.start() }

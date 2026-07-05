@@ -1,13 +1,20 @@
 import SwiftUI
 import Observation
 
-/// Shared shell chrome state: sidebar visibility (⌘B / titlebar toggle) and
-/// cross-view focus requests (⌘⇧F → sidebar search).
+/// Center-pane routes beyond the chat surface.
+enum ShellRoute: Equatable {
+    case chat
+    case skillsTools
+}
+
+/// Shared shell chrome state: sidebar visibility (⌘B / titlebar toggle),
+/// cross-view focus requests (⌘⇧F → sidebar search), and the center route.
 @MainActor
 @Observable
 final class ShellLayoutState {
     var sidebarVisible = true
     var pendingSearchFocus = false
+    var route: ShellRoute = .chat
 
     func toggleSidebar() {
         withAnimation(.easeInOut(duration: 0.2)) {
@@ -31,6 +38,7 @@ struct ShellRootView: View {
     @Environment(AppModel.self) private var model
     @Environment(ChatCoordinator.self) private var chat
     @Environment(ThemeStore.self) private var themeStore
+    @Environment(OverlayCoordinator.self) private var overlays
 
     @State private var shell = ShellLayoutState()
 
@@ -57,6 +65,7 @@ struct ShellRootView: View {
             StatusBarView()
         }
         .background(theme.appBackground)
+        .overlay { OverlayHostView() }
         .overlay {
             if model.boot.bootProgress.visible {
                 BootOverlayView()
@@ -75,10 +84,25 @@ struct ShellRootView: View {
             toggleAppearance: { themeStore.toggleMode() }
         ))
         .background(searchFocusShortcut)
+        .onChange(of: chat.activeSessionID) {
+            // Opening a session from anywhere (sidebar, palette, picker) returns
+            // the center pane to the chat surface.
+            shell.route = .chat
+        }
     }
 
     @ViewBuilder
     private var centerContent: some View {
+        switch shell.route {
+        case .skillsTools:
+            SkillsToolsView()
+        case .chat:
+            chatContent
+        }
+    }
+
+    @ViewBuilder
+    private var chatContent: some View {
         // Intro shows only for a fresh draft with an empty transcript; once a draft's
         // first send paints an optimistic bubble (items non-empty) or an existing
         // session is open, render the transcript so streaming is visible even before
@@ -95,12 +119,18 @@ struct ShellRootView: View {
         }
     }
 
-    /// Hidden ⌘⇧F trigger — focuses (and if needed reveals) the sidebar search.
+    /// Hidden shortcut triggers: ⌘⇧F sidebar search, ⌘K/⌘P command palette.
     private var searchFocusShortcut: some View {
-        Button("") { shell.focusSessionSearch() }
-            .keyboardShortcut("f", modifiers: [.command, .shift])
-            .opacity(0)
-            .frame(width: 0, height: 0)
-            .accessibilityHidden(true)
+        Group {
+            Button("") { shell.focusSessionSearch() }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+            Button("") { overlays.toggle(.commandPalette) }
+                .keyboardShortcut("k", modifiers: .command)
+            Button("") { overlays.toggle(.commandPalette) }
+                .keyboardShortcut("p", modifiers: .command)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 }

@@ -42,10 +42,13 @@ struct SidebarView: View {
         VStack(spacing: 1) {
             // codicon `robot` — no SF equivalent, `plus.bubble` per mapping table
             SidebarNavRow(icon: "plus.bubble", label: "New session", showsNewSessionKeycaps: true) {
+                shell.route = .chat
                 chat.startNewSession()
             }
-            // codicon `symbol-misc` — Phase 2 route /skills
-            SidebarNavRow(icon: "wand.and.stars", label: "Skills & Tools", disabled: true) {}
+            // codicon `symbol-misc`
+            SidebarNavRow(icon: "wand.and.stars", label: "Skills & Tools") {
+                shell.route = .skillsTools
+            }
             // codicon `comment` — Phase 2 route /messaging
             SidebarNavRow(icon: "bubble.left", label: "Messaging", disabled: true) {}
             // codicon `files` — Phase 2 route /artifacts

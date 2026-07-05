@@ -54,6 +54,9 @@ struct ConnectionSettings: Equatable, Sendable {
     var mode: ConnectionMode = .v1
 
     static let defaultRESTBaseURL = "https://api-hermes.myrakilabs.com"
+    /// Gateway mode's REST default — the agent gateway host (api-hermes serves
+    /// only the /v1 inference API, not /api/*).
+    static let defaultGatewayRESTBaseURL = "https://hermes.myrakilabs.com"
     static let defaultWSURL = "wss://hermes.myrakilabs.com/api/ws"
 
     static let `default` = ConnectionSettings(
@@ -116,6 +119,15 @@ struct ConnectionSettings: Equatable, Sendable {
     }
 
     func webSocketURL(token: String) throws -> URL {
+        try webSocketURL(authParam: "token", value: token)
+    }
+
+    /// Gated-gateway variant: single-use `?ticket=` minted immediately before connect.
+    func webSocketURL(ticket: String) throws -> URL {
+        try webSocketURL(authParam: "ticket", value: ticket)
+    }
+
+    private func webSocketURL(authParam: String, value: String) throws -> URL {
         let cleanedWS = try Self.normalizedWSURLString(wsURLString)
         let base: String
         if !cleanedWS.isEmpty {
@@ -128,10 +140,10 @@ struct ConnectionSettings: Equatable, Sendable {
             base = components.url!.absoluteString + "/api/ws"
         }
 
-        guard let encodedToken = token.addingPercentEncoding(withAllowedCharacters: .uriComponentAllowed) else {
+        guard let encoded = value.addingPercentEncoding(withAllowedCharacters: .uriComponentAllowed) else {
             throw HermesAPIError(message: "Session token could not be encoded.")
         }
-        guard let url = URL(string: base + "?token=" + encodedToken) else {
+        guard let url = URL(string: base + "?" + authParam + "=" + encoded) else {
             throw HermesAPIError(message: "WebSocket gateway URL is not valid: \(base)")
         }
         return url
