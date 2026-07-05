@@ -3,8 +3,9 @@ import Foundation
 // Skills and skill-hub wire types (`/api/skills…`).
 
 /// One row of the bare array returned by `GET /api/skills`.
+/// `category` is nullable on the wire (e.g. `computer-use`, `hermes-link`).
 struct SkillInfo: Codable, Equatable, Sendable {
-    var category: String
+    var category: String?
     var description: String
     var enabled: Bool
     var name: String

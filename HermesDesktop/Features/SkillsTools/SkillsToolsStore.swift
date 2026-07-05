@@ -130,7 +130,8 @@ final class SkillsToolsStore {
     }
 
     static func category(for skill: SkillInfo) -> String {
-        skill.category.isEmpty ? "general" : skill.category
+        let category = skill.category ?? ""
+        return category.isEmpty ? "general" : category
     }
 
     /// `[(key, count)]` over ALL skills, sorted by key.
@@ -152,7 +153,7 @@ final class SkillsToolsStore {
                 guard !q.isEmpty else { return true }
                 return skill.name.lowercased().contains(q)
                     || skill.description.lowercased().contains(q)
-                    || skill.category.lowercased().contains(q)
+                    || Self.category(for: skill).lowercased().contains(q)
             }
             .sorted { $0.name < $1.name }
     }
