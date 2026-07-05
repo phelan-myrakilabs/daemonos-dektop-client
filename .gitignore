@@ -1,0 +1,14 @@
+# Read-only reference checkout (disposable)
+reference/
+
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# Session memory buffers
+.remember/
