@@ -117,8 +117,12 @@ struct SidebarView: View {
                 ForEach(searchResults) { SessionRowView(session: $0) }
             }
         } else {
-            if !list.pinnedSessions.isEmpty {
-                SidebarSectionHeader(label: "Pinned", count: countLabel(loaded: list.pinnedSessions.count, total: list.pinnedSessions.count))
+            // Pinned section is always present; an empty pin set shows the hint row.
+            SidebarSectionHeader(label: "Pinned",
+                                 count: list.pinnedSessions.isEmpty ? "" : countLabel(loaded: list.pinnedSessions.count, total: list.pinnedSessions.count))
+            if list.pinnedSessions.isEmpty {
+                emptyMessage("Shift-click a chat to pin")
+            } else {
                 ForEach(list.pinnedSessions) { SessionRowView(session: $0) }
             }
             SidebarSectionHeader(label: "Sessions", count: countLabel(loaded: list.sessions.count, total: list.total))
@@ -246,11 +250,11 @@ private struct SidebarSectionHeader: View {
     var body: some View {
         HStack(spacing: 4) {
             HStack(spacing: 8) {
-                DitherDot(color: theme.accent)
+                DitherDot(color: theme.primary)
                 Text(label.uppercased())
                     .font(.system(size: 10, weight: .semibold))
                     .tracking(0.16 * 10)
-                    .foregroundStyle(theme.accent)
+                    .foregroundStyle(theme.primary)
             }
             .padding(.leading, 8)
             Spacer(minLength: 0)
@@ -311,7 +315,7 @@ private struct SessionRowView: View {
     /// needs-input state requires the chat module's pending clarify/approval
     /// signal — Phase 2.
     private var isWorking: Bool { session.isActive == true }
-    private var isPinned: Bool { model.sessionList.pinnedIDs.contains(session.id) }
+    private var isPinned: Bool { model.sessionList.isPinned(session) }
 
     private var displayTitle: String {
         if let title = session.title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
@@ -325,7 +329,12 @@ private struct SessionRowView: View {
 
     var body: some View {
         Button {
-            chat.openSession(session)
+            // Shift-click toggles the pin; a plain click opens the session.
+            if NSEvent.modifierFlags.contains(.shift) {
+                model.sessionList.togglePin(session)
+            } else {
+                chat.openSession(session)
+            }
         } label: {
             HStack(spacing: 6) {
                 SessionStatusDot(working: isWorking)
@@ -357,7 +366,7 @@ private struct SessionRowView: View {
         .onHover { hovering = $0 }
         .contextMenu {
             Button(isPinned ? "Unpin" : "Pin") { // codicon `pin`
-                model.sessionList.togglePin(session.id)
+                model.sessionList.togglePin(session)
             }
             Button("Copy ID") {
                 NSPasteboard.general.clearContents()

@@ -28,6 +28,9 @@ struct HermesTheme: Equatable {
     // Accent
     var accent: Color                // --theme-midground (#0053FD in nous light)
     var accentForeground: Color
+    var primary: Color               // --theme-primary (skin primary seed)
+    var primaryForeground: Color
+    var composerRing: Color          // composer focus ring (composerRing over input)
 
     // Chat
     var userBubbleBackground: Color

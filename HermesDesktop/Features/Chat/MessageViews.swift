@@ -8,24 +8,23 @@ struct UserMessageView: View {
     @Environment(\.hermesTheme) private var theme
 
     var body: some View {
-        HStack {
-            Spacer(minLength: 0)
-            Text(text)
-                .font(.system(size: 13))
-                .foregroundStyle(theme.textPrimary)
-                .lineSpacing(3)
-                .textSelection(.enabled)
-                .padding(.horizontal, 12) // px-3
-                .padding(.vertical, 8)    // py-2
-                .background(theme.userBubbleBackground)
-                .clipShape(RoundedRectangle(cornerRadius: HermesTheme.radius(12)))
-                .overlay(
-                    RoundedRectangle(cornerRadius: HermesTheme.radius(12))
-                        .strokeBorder(theme.userBubbleBorder, lineWidth: 1)
-                )
-                .frame(maxWidth: HermesTheme.contentColumnMaxWidth * 0.66, alignment: .trailing)
-        }
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        // `w-full` bordered pill, text-left — spans the full transcript column
+        // (reference USER_BUBBLE_BASE_CLASS), not a right-aligned chat bubble.
+        Text(text)
+            .font(.system(size: 13))
+            .foregroundStyle(theme.textPrimary)
+            .lineSpacing(3)
+            .multilineTextAlignment(.leading)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12) // px-3
+            .padding(.vertical, 8)    // py-2
+            .background(theme.userBubbleBackground)
+            .clipShape(RoundedRectangle(cornerRadius: HermesRadius.xl)) // rounded-xl
+            .overlay(
+                RoundedRectangle(cornerRadius: HermesRadius.xl)
+                    .strokeBorder(theme.userBubbleBorder, lineWidth: 1)
+            )
     }
 }
 

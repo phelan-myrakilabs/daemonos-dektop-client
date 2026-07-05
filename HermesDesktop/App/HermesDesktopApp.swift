@@ -20,6 +20,7 @@ struct HermesDesktopApp: App {
             .environment(model)
             .environment(themeStore)
             .environment(\.hermesTheme, themeStore.theme)
+            .background(TrafficLightPositioner())
             .task { model.boot.start() }
         }
         .windowStyle(.hiddenTitleBar)

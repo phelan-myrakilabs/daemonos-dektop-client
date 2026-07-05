@@ -79,14 +79,16 @@ struct ShellRootView: View {
 
     @ViewBuilder
     private var centerContent: some View {
-        if chat.activeSessionID == nil {
+        // Intro shows only for a fresh draft with an empty transcript; once a draft's
+        // first send paints an optimistic bubble (items non-empty) or an existing
+        // session is open, render the transcript so streaming is visible even before
+        // the backend assigns a stored session id.
+        let showIntro = chat.activeViewModel.map { $0.isDraft && $0.items.isEmpty } ?? true
+        if showIntro {
             ZStack(alignment: .bottom) {
                 EmptyStateView()
-                // Docked composer: bottom-center, visible width = min(780, available − 32).
+                // ComposerView applies its own 780pt column + padding.
                 ComposerView()
-                    .frame(maxWidth: HermesTheme.contentColumnMaxWidth)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
             }
         } else {
             ChatSurfaceView()

@@ -8,6 +8,9 @@ struct StatusBarView: View {
     @Environment(\.hermesTheme) private var theme
 
     @State private var sessionOpenedAt: Date?
+    @State private var turnStartedAt: Date?
+
+    private var turnRunning: Bool { chat.activeViewModel?.isBusy ?? false }
 
     private static let appVersion =
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0"
@@ -24,11 +27,14 @@ struct StatusBarView: View {
 
             Spacer(minLength: 8)
 
-            sessionTimerChip
+            // Reference right-cluster order: running-turn timer, context usage,
+            // session timer, version.
+            runningTurnChip
             // Context usage is fed by chat usage events — Phase 2. Detail uses the
             // reference `contextBarLabel` format.
             StatusChip(detail: "[░░░░░░░░░░] 0%", monoDetail: true,
                        disabled: true, help: "Open context usage breakdown")
+            sessionTimerChip
             // Lucide `Hash` — Updates overlay is Phase 2.
             StatusChip(icon: "number", label: "v\(Self.appVersion)",
                        disabled: true, help: "Hermes Desktop v\(Self.appVersion)")
@@ -45,6 +51,23 @@ struct StatusBarView: View {
                 sessionOpenedAt = nil
             } else if old != new || sessionOpenedAt == nil {
                 sessionOpenedAt = Date()
+            }
+        }
+        .onChange(of: turnRunning) { _, running in
+            turnStartedAt = running ? Date() : nil
+        }
+    }
+
+    // MARK: - Running turn timer
+
+    @ViewBuilder
+    private var runningTurnChip: some View {
+        if let start = turnStartedAt {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                StatusChip(icon: "circle.fill", label: "Running",
+                           detail: Self.formatDuration(context.date.timeIntervalSince(start)),
+                           tint: theme.statusWarning, monoDetail: true,
+                           help: "Current turn elapsed")
             }
         }
     }

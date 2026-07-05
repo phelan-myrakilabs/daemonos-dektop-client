@@ -4,8 +4,14 @@ import Observation
 /// Sidebar session list. Mirrors the reference `refreshSessions`:
 /// `GET /api/profiles/sessions` with page size 50, `min_messages=1`,
 /// `archived=exclude`, `order=recent`, and the messaging/automation sources excluded.
-/// Sessions are ordered by creation time descending (deliberately not by last
-/// activity). Pinning is client-side state.
+///
+/// The server returns rows in `order=recent` (last_active desc), but the sidebar
+/// deliberately re-sorts by creation time (`started_at`) descending so activity on
+/// an old session never floats it up (reference sidebar `sortedSessions`).
+///
+/// Pinning is client-side state keyed by the durable lineage-root id
+/// (`_lineage_root_id ?? id`, reference `sessionPinId`) so a pin survives
+/// auto-compression tip changes; pin order is preserved.
 @MainActor
 @Observable
 final class SessionListStore {
@@ -26,20 +32,34 @@ final class SessionListStore {
     private(set) var total = 0
     private(set) var isLoading = false
     private(set) var lastError: String?
-    private(set) var pinnedIDs: Set<String>
+    /// Durable lineage-root pin ids, in user-facing order.
+    private(set) var pinnedIDs: [String]
 
     init(rest: HermesRESTClient, defaults: UserDefaults = .standard) {
         self.rest = rest
         self.defaults = defaults
-        self.pinnedIDs = Set(defaults.stringArray(forKey: Self.pinnedDefaultsKey) ?? [])
+        self.pinnedIDs = defaults.stringArray(forKey: Self.pinnedDefaultsKey) ?? []
     }
 
+    /// The durable id a pin is stored under (`_lineage_root_id ?? id`).
+    static func pinID(for session: SessionInfo) -> String {
+        session.lineageRootID ?? session.id
+    }
+
+    func isPinned(_ session: SessionInfo) -> Bool {
+        pinnedIDs.contains(Self.pinID(for: session))
+    }
+
+    /// Pinned rows in pin order; a pinned session whose row isn't currently loaded
+    /// is simply absent until it pages in.
     var pinnedSessions: [SessionInfo] {
-        sessions.filter { pinnedIDs.contains($0.id) }
+        pinnedIDs.compactMap { pinID in
+            sessions.first { Self.pinID(for: $0) == pinID }
+        }
     }
 
     var unpinnedSessions: [SessionInfo] {
-        sessions.filter { !pinnedIDs.contains($0.id) }
+        sessions.filter { !isPinned($0) }
     }
 
     func refresh(profile: String) async throws {
@@ -47,7 +67,7 @@ final class SessionListStore {
         defer { isLoading = false }
         do {
             let response = try await fetchPage(profile: profile, offset: 0)
-            sessions = response.sessions
+            sessions = Self.sortedByCreation(response.sessions)
             total = response.total
             lastError = nil
         } catch {
@@ -63,20 +83,27 @@ final class SessionListStore {
         do {
             let response = try await fetchPage(profile: profile, offset: sessions.count)
             let known = Set(sessions.map(\.id))
-            sessions.append(contentsOf: response.sessions.filter { !known.contains($0.id) })
+            let merged = sessions + response.sessions.filter { !known.contains($0.id) }
+            sessions = Self.sortedByCreation(merged)
             total = response.total
         } catch {
             lastError = error.localizedDescription
         }
     }
 
-    func togglePin(_ id: String) {
-        if pinnedIDs.contains(id) {
-            pinnedIDs.remove(id)
+    /// Reference sidebar order: creation time (`started_at`) descending.
+    private static func sortedByCreation(_ rows: [SessionInfo]) -> [SessionInfo] {
+        rows.sorted { ($0.startedAt ?? 0) > ($1.startedAt ?? 0) }
+    }
+
+    func togglePin(_ session: SessionInfo) {
+        let id = Self.pinID(for: session)
+        if let index = pinnedIDs.firstIndex(of: id) {
+            pinnedIDs.remove(at: index)
         } else {
-            pinnedIDs.insert(id)
+            pinnedIDs.append(id)
         }
-        defaults.set(Array(pinnedIDs), forKey: Self.pinnedDefaultsKey)
+        defaults.set(pinnedIDs, forKey: Self.pinnedDefaultsKey)
     }
 
     private func fetchPage(profile: String, offset: Int) async throws -> PaginatedSessions {

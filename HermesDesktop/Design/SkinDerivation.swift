@@ -247,6 +247,10 @@ enum HermesSkinDerivation {
             hairline: accentInk(0.10, 0.05).color,
             accent: accent.color,
             accentForeground: (c.midgroundForeground ?? accent.readableForeground).color,
+            primary: c.primary.color,
+            primaryForeground: c.primaryForeground.color,
+            // Composer ring: composerRing (falls back to midground) at 18% over input.
+            composerRing: HermesRGBA.mix(c.composerRing ?? accent, 0.18, c.input).color,
             userBubbleBackground: bubble.color,
             userBubbleBorder: (c.userBubbleBorder ?? c.border).color,
             codeBackground: mode.inlineCodeBackground.color,

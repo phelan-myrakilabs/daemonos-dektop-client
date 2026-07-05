@@ -32,7 +32,16 @@ final class ConnectionStore {
 
     private func persist() {
         defaults.set(settings.restBaseURLString, forKey: Keys.restBaseURL)
-        defaults.set(settings.wsURLString, forKey: Keys.wsURL)
+        // Token-hygiene backstop: never let a query string (which could carry ?token=)
+        // reach UserDefaults, even if a raw URL slipped past the settings form.
+        defaults.set(Self.strippedOfQuery(settings.wsURLString), forKey: Keys.wsURL)
+    }
+
+    private static func strippedOfQuery(_ raw: String) -> String {
+        guard var components = URLComponents(string: raw) else { return raw }
+        components.query = nil
+        components.fragment = nil
+        return components.url?.absoluteString ?? raw
     }
 
     /// No token stored yet → show Settings instead of dialing.

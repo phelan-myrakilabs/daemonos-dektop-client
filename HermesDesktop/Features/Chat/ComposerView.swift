@@ -2,16 +2,15 @@ import SwiftUI
 
 /// The docked composer. Environment-driven; shares the transcript's 780pt column.
 ///
-/// Key handling (this port): Enter sends; Shift+Enter and Cmd+Enter insert a
-/// newline. The reference's full Enter decision tree, for later phases:
-///   1. queue-edit active → save the edit back to the queue
-///   2. busy + slash command (no attachments) → execute immediately (never queued)
-///   3. busy + payload → queue the draft (per-session prompt queue)
-///   4. busy + empty → Stop (interrupt)
-///   5. idle + empty + queue non-empty → drain next queued prompt
-///   6. idle + payload → send (restore draft + attachments on rejection)
-/// (Cmd+Enter is Steer in the reference — steering is out of scope here, so it
-/// falls back to newline; Shift+Enter is always newline.)
+/// Key handling (matches the reference Enter tree, index.tsx):
+///   - Shift+Enter → newline at the caret (handled natively by the field)
+///   - Cmd/Ctrl+Enter → reserved for Steer (out of scope) → swallowed, never sends
+///   - plain Enter while disconnected → no-op (draft stays editable, submit blocked)
+///   - plain Enter, busy + empty → no-op (interrupting is explicit via Stop, never
+///     a stray Enter after sending)
+///   - plain Enter with payload → submit (queues while busy)
+/// Later phases add: queue-edit save, busy slash-command immediate exec, idle-empty
+/// queue drain, Esc-to-interrupt.
 struct ComposerView: View {
     @Environment(ChatCoordinator.self) private var coordinator
     @Environment(\.hermesTheme) private var theme
@@ -27,10 +26,14 @@ struct ComposerView: View {
     // MARK: - Body
 
     private func composerBody(viewModel: ChatSessionViewModel, text: Binding<String>) -> some View {
-        let disabled = coordinator.gatewayState != .open
+        // Submit is gated on the gateway being open, but the field stays EDITABLE
+        // while reconnecting so a draft can be typed (reference: disabled blocks
+        // Enter-submit only).
+        let submitDisabled = coordinator.gatewayState != .open
         return HStack(alignment: .bottom, spacing: 4) {
             attachMenu
                 .padding(.bottom, 3)
+                .disabled(submitDisabled)
 
             TextField(placeholder(for: viewModel), text: text, axis: .vertical)
                 .textFieldStyle(.plain)
@@ -40,12 +43,17 @@ struct ComposerView: View {
                 .focused($inputFocused)
                 .padding(.vertical, 5)
                 .onKeyPress(keys: [.return], phases: .down) { press in
-                    if press.modifiers.contains(.shift) || press.modifiers.contains(.command) {
-                        text.wrappedValue += "\n"
+                    // Shift+Enter → let the field insert a newline at the caret.
+                    if press.modifiers.contains(.shift) { return .ignored }
+                    // Cmd/Ctrl+Enter → Steer (out of scope); swallow so it never sends.
+                    if press.modifiers.contains(.command) || press.modifiers.contains(.control) {
                         return .handled
                     }
-                    guard !disabled else { return .handled }
-                    handlePrimaryAction(viewModel)
+                    // Plain Enter.
+                    guard !submitDisabled else { return .handled } // reconnecting: no submit
+                    let hasText = !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    if viewModel.isBusy && !hasText { return .handled } // empty Enter while busy = no-op
+                    if hasText { viewModel.submitDraft() }
                     return .handled
                 }
 
@@ -53,34 +61,23 @@ struct ComposerView: View {
                 modelPill(viewModel)
                 micButton
                 primaryButton(viewModel)
+                    .disabled(submitDisabled)
             }
             .padding(.bottom, 2)
         }
         .padding(.horizontal, 8)   // --composer-surface-pad-x
         .padding(.vertical, 5)     // --composer-surface-pad-y
         .background(theme.composerBackground)
-        .clipShape(RoundedRectangle(cornerRadius: HermesTheme.radius(16)))
+        .clipShape(RoundedRectangle(cornerRadius: HermesRadius.xl2))
         .overlay(
-            RoundedRectangle(cornerRadius: HermesTheme.radius(16))
-                .strokeBorder(theme.strokeSecondary, lineWidth: 1)
+            RoundedRectangle(cornerRadius: HermesRadius.xl2)
+                .strokeBorder(theme.composerRing, lineWidth: 1)
         )
         .frame(maxWidth: HermesTheme.contentColumnMaxWidth)
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 10)
-        .disabled(disabled)
-        .opacity(disabled ? 0.75 : 1)
-    }
-
-    // MARK: - Actions
-
-    private func handlePrimaryAction(_ viewModel: ChatSessionViewModel) {
-        let hasText = !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if viewModel.isBusy && !hasText {
-            viewModel.interrupt()
-        } else if hasText {
-            viewModel.submitDraft()
-        }
+        .opacity(submitDisabled ? 0.85 : 1)
     }
 
     // MARK: - Controls

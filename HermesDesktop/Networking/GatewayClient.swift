@@ -106,6 +106,9 @@ actor GatewayClient {
         case .text(let text):
             handleInbound(text)
         case .closed:
+            // Invalidate the URLSession (which strongly retains its delegate) — a bare
+            // `socket = nil` would leak the session + connection on every server close.
+            socket?.cancel()
             socket = nil
             connectTimeoutTask?.cancel()
             let wasConnecting = state == .connecting

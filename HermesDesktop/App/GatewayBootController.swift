@@ -56,6 +56,7 @@ final class GatewayBootController {
 
     private var stateWatcher: Task<Void, Never>?
     private var eventWatcher: Task<Void, Never>?
+    private var bootTask: Task<Void, Never>?
     private var pathMonitor: NWPathMonitor?
     private var observers: [NSObjectProtocol] = []
 
@@ -90,7 +91,7 @@ final class GatewayBootController {
         }
         installWakeTriggers()
 
-        Task { await boot() }
+        bootTask = Task { await boot() }
     }
 
     func stop() {
@@ -108,14 +109,21 @@ final class GatewayBootController {
     }
 
     /// Retry from the error overlay (also used by Settings after saving credentials).
+    /// Tears the existing socket down first so a rotated token / changed endpoint is
+    /// actually re-dialed — `GatewayClient.connect()` no-ops on an already-open socket,
+    /// so without the close the new URL would be silently ignored.
     func retryBoot() {
         bootCompleted = false
         escalated = false
         reconnectAttempt = 0
         reconnectTimer?.cancel()
         reconnectTimer = nil
+        bootTask?.cancel()
         bootProgress = .initial
-        Task { await boot() }
+        bootTask = Task {
+            await gateway.close()
+            await boot()
+        }
     }
 
     // MARK: - Boot
@@ -154,9 +162,14 @@ final class GatewayBootController {
             }
             let wsURL = try connectionStore.settings.webSocketURL(token: token)
             try await gateway.connect(url: wsURL)
+            if Task.isCancelled { return } // superseded by a newer retryBoot
 
             // Record active profile (best-effort; defaults to "default").
-            if let profile = try? await rest.request("/api/profiles/active", as: ActiveProfileResponse.self) {
+            // 60 s startup timeout: this fetch can be slow against a tunneled backend,
+            // and a timeout here silently strands the sidebar on profile=default.
+            if let profile = try? await rest.request("/api/profiles/active",
+                                                     timeout: HermesRESTClient.startupTimeout,
+                                                     as: ActiveProfileResponse.self) {
                 let current = profile.current.trimmingCharacters(in: .whitespacesAndNewlines)
                 activeProfile = current.isEmpty ? "default" : current
             } else {
@@ -172,6 +185,7 @@ final class GatewayBootController {
             completeBoot()
             bootCompleted = true
         } catch {
+            if Task.isCancelled { return } // superseded boot: don't clobber the new attempt
             failBoot(error.localizedDescription)
         }
     }

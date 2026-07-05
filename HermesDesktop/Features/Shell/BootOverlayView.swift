@@ -22,22 +22,22 @@ struct BootOverlayView: View {
 
     // MARK: - Connecting
 
-    /// Mono, uppercase, wide-tracked line in the accent color (the reference
-    /// renders a scrambling "CONNECTING" word in this style).
+    /// Mono, uppercase, wide-tracked "CONNECTING" word in `--theme-primary`
+    /// (the reference scrambles the tail; the scramble animation is Phase 2).
     private var connecting: some View {
         let boot = model.boot.bootProgress
         return VStack(spacing: 16) {
-            Text("HERMES DESKTOP")
+            Text("CONNECTING")
                 .font(HermesTheme.monoFont(size: 10.5).weight(.semibold))
                 .tracking(0.4 * 10.5) // 0.4em
-                .foregroundStyle(theme.accent)
+                .foregroundStyle(theme.primary)
             Text(boot.message)
                 .font(.system(size: 12))
                 .foregroundStyle(theme.textTertiary)
                 .multilineTextAlignment(.center)
             ProgressView(value: Double(boot.progress), total: 100)
                 .progressViewStyle(.linear)
-                .tint(theme.accent)
+                .tint(theme.primary)
                 .frame(width: 220)
         }
         .padding(24)
@@ -67,11 +67,11 @@ struct BootOverlayView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12)
                 .background(
-                    RoundedRectangle(cornerRadius: HermesTheme.radius(16), style: .continuous)
+                    RoundedRectangle(cornerRadius: HermesRadius.xl2, style: .continuous) // rounded-2xl
                         .fill(theme.statusError.opacity(0.1))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: HermesTheme.radius(16), style: .continuous)
+                    RoundedRectangle(cornerRadius: HermesRadius.xl2, style: .continuous)
                         .stroke(theme.statusError.opacity(0.3), lineWidth: 1)
                 )
             HStack(spacing: 8) {
@@ -89,11 +89,11 @@ struct BootOverlayView: View {
         .padding(24)
         .frame(maxWidth: 640) // reference max-w-[40rem]
         .background(
-            RoundedRectangle(cornerRadius: HermesTheme.radius(12), style: .continuous)
+            RoundedRectangle(cornerRadius: HermesRadius.xl, style: .continuous) // rounded-xl
                 .fill(theme.cardBackground)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: HermesTheme.radius(12), style: .continuous)
+            RoundedRectangle(cornerRadius: HermesRadius.xl, style: .continuous)
                 .stroke(theme.strokeSecondary, lineWidth: 1)
         )
         .padding(24)

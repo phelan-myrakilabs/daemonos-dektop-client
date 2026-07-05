@@ -59,17 +59,36 @@ struct ConnectionSettings: Equatable, Sendable {
     /// `encodeURIComponent` semantics). Uses the explicit WS URL when set, else
     /// derives from the REST base per the reference `buildGatewayWsUrl`
     /// (`https → wss`, path prefix preserved, `/api/ws` appended).
+    /// Normalizes an explicit WS URL: trims, requires `wss://`, and strips any query
+    /// string, fragment, and trailing slashes. Stripping the query is a token-hygiene
+    /// guard — a pasted `…/api/ws?token=SECRET` must never be persisted to UserDefaults,
+    /// and the live token is appended fresh at connect time. Empty input returns "".
+    static func normalizedWSURLString(_ raw: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        guard var components = URLComponents(string: trimmed), components.host != nil else {
+            throw HermesAPIError(message: "WebSocket gateway URL is not valid: \(trimmed)")
+        }
+        guard components.scheme == "wss" else {
+            throw HermesAPIError(message: "WebSocket gateway URL must be wss://, got \(components.scheme.map { "\($0):" } ?? "none")")
+        }
+        components.query = nil
+        components.fragment = nil
+        while components.path.hasSuffix("/") {
+            components.path = String(components.path.dropLast())
+        }
+        guard let cleaned = components.url?.absoluteString else {
+            throw HermesAPIError(message: "WebSocket gateway URL is not valid: \(trimmed)")
+        }
+        return cleaned
+    }
+
     func webSocketURL(token: String) throws -> URL {
+        let cleanedWS = try Self.normalizedWSURLString(wsURLString)
         let base: String
-        let trimmedWS = wsURLString.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedWS.isEmpty {
-            guard let components = URLComponents(string: trimmedWS), components.host != nil else {
-                throw HermesAPIError(message: "WebSocket gateway URL is not valid: \(trimmedWS)")
-            }
-            guard components.scheme == "wss" else {
-                throw HermesAPIError(message: "WebSocket gateway URL must be wss://, got \(components.scheme.map { "\($0):" } ?? "none")")
-            }
-            base = trimmedWS
+        if !cleanedWS.isEmpty {
+            // The explicit WS URL is the complete endpoint (default already ends /api/ws).
+            base = cleanedWS
         } else {
             let rest = try Self.normalizeRESTBaseURL(restBaseURLString)
             var components = URLComponents(url: rest, resolvingAgainstBaseURL: false)!
@@ -80,8 +99,7 @@ struct ConnectionSettings: Equatable, Sendable {
         guard let encodedToken = token.addingPercentEncoding(withAllowedCharacters: .uriComponentAllowed) else {
             throw HermesAPIError(message: "Session token could not be encoded.")
         }
-        let separator = base.contains("?") ? "&" : "?"
-        guard let url = URL(string: base + separator + "token=" + encodedToken) else {
+        guard let url = URL(string: base + "?token=" + encodedToken) else {
             throw HermesAPIError(message: "WebSocket gateway URL is not valid: \(base)")
         }
         return url

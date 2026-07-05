@@ -37,21 +37,22 @@ struct CodeBlockView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text(language.isEmpty ? "Code" : language)
+            // Reference CodeCard label: "Code · <language>" (bare "Code" when unknown).
+            Text(language.isEmpty ? "Code" : "Code · \(language)")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(theme.textSecondary)
             Spacer(minLength: 0)
-            if isHovering || didCopy {
-                Button(action: copy) {
-                    Label(didCopy ? "Copied" : "Copy code",
-                          systemImage: didCopy ? "checkmark" : "doc.on.doc")
-                        .labelStyle(.iconOnly)
-                        .font(.system(size: 10))
-                        .foregroundStyle(theme.textTertiary)
-                }
-                .buttonStyle(.plain)
-                .help("Copy code")
+            Button(action: copy) {
+                Label(didCopy ? "Copied" : "Copy code",
+                      systemImage: didCopy ? "checkmark" : "doc.on.doc")
+                    .labelStyle(.iconOnly)
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.textTertiary)
             }
+            .buttonStyle(.plain)
+            .help("Copy code")
+            // Rests at 55% opacity, full on hover (reference copy affordance).
+            .opacity(didCopy || isHovering ? 1 : 0.55)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
