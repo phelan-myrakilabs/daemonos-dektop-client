@@ -9,8 +9,12 @@ final class AppModel {
     let connectionStore: ConnectionStore
     let gateway: GatewayClient
     let rest: HermesRESTClient
+    let v1: V1ChatClient
     let sessionList: SessionListStore
     let boot: GatewayBootController
+
+    /// Default model id for the v1 transport (the deployment exposes `hermes-agent`).
+    static let defaultV1Model = "hermes-agent"
 
     init() {
         let connectionStore = ConnectionStore()
@@ -30,6 +34,23 @@ final class AppModel {
         )
         self.rest = rest
 
+        // Streaming-friendly session for the v1 transport: a long inactivity timeout
+        // so a running agent turn (kept alive by tool-progress events) is not dropped.
+        let streamConfig = URLSessionConfiguration.default
+        streamConfig.timeoutIntervalForRequest = V1ChatClient.streamTimeout
+        streamConfig.waitsForConnectivity = false
+        self.v1 = V1ChatClient(
+            baseURLProvider: {
+                let raw = UserDefaults.standard.string(forKey: ConnectionStore.Keys.restBaseURL)
+                    ?? ConnectionSettings.defaultRESTBaseURL
+                return try ConnectionSettings.normalizeRESTBaseURL(raw)
+            },
+            tokenProvider: {
+                (try? KeychainTokenStore().read()) ?? nil
+            },
+            session: URLSession(configuration: streamConfig)
+        )
+
         let gateway = GatewayClient()
         self.gateway = gateway
 
@@ -40,6 +61,7 @@ final class AppModel {
             connectionStore: connectionStore,
             gateway: gateway,
             rest: rest,
+            v1: v1,
             sessionList: sessionList
         )
     }

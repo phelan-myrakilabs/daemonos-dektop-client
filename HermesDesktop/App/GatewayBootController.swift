@@ -39,6 +39,7 @@ final class GatewayBootController {
     private let connectionStore: ConnectionStore
     private let gateway: GatewayClient
     private let rest: HermesRESTClient
+    private let v1: V1ChatClient
     private let sessionList: SessionListStore
 
     private(set) var bootProgress: BootProgress = .initial
@@ -47,6 +48,17 @@ final class GatewayBootController {
     private(set) var activeProfile = "default"
     /// Skin payload from the most recent `gateway.ready` / `skin.changed` event.
     private(set) var serverSkin: JSONValue?
+
+    /// v1 transport: true once `/health` succeeds.
+    private(set) var v1Ready = false
+    /// Backend version reported by `/health` (v1) — surfaced in the status bar.
+    private(set) var serverVersion: String?
+
+    var mode: ConnectionMode { connectionStore.settings.mode }
+
+    /// Unified readiness across both transports — drives composer enablement and the
+    /// gateway status pill.
+    var isReady: Bool { mode == .v1 ? v1Ready : gatewayState == .open }
 
     private var reconnectAttempt = 0
     private var reconnecting = false
@@ -63,10 +75,12 @@ final class GatewayBootController {
     init(connectionStore: ConnectionStore,
          gateway: GatewayClient,
          rest: HermesRESTClient,
+         v1: V1ChatClient,
          sessionList: SessionListStore) {
         self.connectionStore = connectionStore
         self.gateway = gateway
         self.rest = rest
+        self.v1 = v1
         self.sessionList = sessionList
     }
 
@@ -115,6 +129,7 @@ final class GatewayBootController {
     func retryBoot() {
         bootCompleted = false
         escalated = false
+        v1Ready = false
         reconnectAttempt = 0
         reconnectTimer?.cancel()
         reconnectTimer = nil
@@ -149,9 +164,13 @@ final class GatewayBootController {
         setBootStep(phase: "renderer.boot", message: "Starting desktop connection", progress: 6)
 
         if connectionStore.needsSetup {
-            // Rewrite decision (the reference has no needs-setup state): without a
-            // token there is nothing to dial — surface the settings prompt.
-            failBoot("Remote Hermes gateway is selected, but no session token is saved. Open Settings → Gateway and save a token, or switch back to Local.")
+            let noun = mode.credentialLabel.lowercased()
+            failBoot("No \(noun) saved. Open Settings → Gateway and save your \(noun).")
+            return
+        }
+
+        if mode == .v1 {
+            await bootV1()
             return
         }
 
@@ -190,6 +209,25 @@ final class GatewayBootController {
         }
     }
 
+    /// v1 boot: probe `/health` (no persistent socket). Sessions are client-side, so
+    /// there is no session-list fetch. Ready as soon as health responds.
+    private func bootV1() async {
+        v1Ready = false
+        setBootStep(phase: "renderer.gateway.connect", message: "Checking Hermes API", progress: 95)
+        do {
+            let health = try await v1.health()
+            if Task.isCancelled { return }
+            serverVersion = health.version
+            activeProfile = "default"
+            v1Ready = true
+            completeBoot()
+            bootCompleted = true
+        } catch {
+            if Task.isCancelled { return }
+            failBoot(error.localizedDescription)
+        }
+    }
+
     private(set) var hermesConfig: JSONValue?
     private(set) var hermesConfigDefaults: JSONValue?
 
@@ -215,7 +253,7 @@ final class GatewayBootController {
                 completeBoot()
             }
         case .closed, .error:
-            if bootCompleted {
+            if bootCompleted, mode == .gateway {
                 scheduleReconnect()
             }
         case .connecting, .idle:
@@ -224,6 +262,7 @@ final class GatewayBootController {
     }
 
     private func scheduleReconnect() {
+        guard mode == .gateway else { return }
         guard reconnectTimer == nil, !reconnecting, gatewayState != .open else { return }
         let delay = min(15.0, 1.0 * pow(2.0, Double(min(reconnectAttempt, 4))))
         reconnectAttempt += 1
@@ -266,7 +305,7 @@ final class GatewayBootController {
     /// Immediate reconnect on wake signals: clears the timer, resets backoff,
     /// reconnects now if the socket is not open. No-op before boot completes.
     func reconnectNow() {
-        guard bootCompleted else { return }
+        guard bootCompleted, mode == .gateway else { return }
         reconnectTimer?.cancel()
         reconnectTimer = nil
         reconnectAttempt = 0

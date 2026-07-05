@@ -24,6 +24,9 @@ final class ChatSessionViewModel: Identifiable {
 
     private let rest: HermesRESTClient
     private let boot: GatewayBootController
+    private let v1: V1ChatClient
+    private let mode: ConnectionMode
+    private let v1ModelID: String
 
     private(set) var storedSessionID: String?
     /// Runtime (gateway-minted) sid; changes on every resume.
@@ -72,19 +75,31 @@ final class ChatSessionViewModel: Identifiable {
     @ObservationIgnored private var flushTask: Task<Void, Never>?
     @ObservationIgnored private var lastFlushAt = Date.distantPast
 
+    // v1 transport
+    @ObservationIgnored private var v1StreamTask: Task<Void, Never>?
+
     // MARK: Init
 
     /// Draft session — no RPC until the first send.
-    init(rest: HermesRESTClient, boot: GatewayBootController) {
+    init(rest: HermesRESTClient, boot: GatewayBootController, v1: V1ChatClient,
+         mode: ConnectionMode, v1ModelID: String) {
         self.rest = rest
         self.boot = boot
+        self.v1 = v1
+        self.mode = mode
+        self.v1ModelID = v1ModelID
         self.phase = .draft
+        if mode == .v1 { self.modelName = v1ModelID }
     }
 
     /// Existing stored session — call `open()` to hydrate.
-    init(session: SessionInfo, rest: HermesRESTClient, boot: GatewayBootController) {
+    init(session: SessionInfo, rest: HermesRESTClient, boot: GatewayBootController,
+         v1: V1ChatClient, mode: ConnectionMode, v1ModelID: String) {
         self.rest = rest
         self.boot = boot
+        self.v1 = v1
+        self.mode = mode
+        self.v1ModelID = v1ModelID
         self.storedSessionID = session.id
         self.title = session.title
         self.modelName = session.model
@@ -97,6 +112,11 @@ final class ChatSessionViewModel: Identifiable {
     /// The prefetch wins the paint; the resume payload's messages are skipped
     /// when the prefetch already landed.
     func open() {
+        // v1 sessions are client-side — nothing to hydrate from the server.
+        if mode == .v1 {
+            phase = .ready
+            return
+        }
         guard let storedID = storedSessionID, openTask == nil else { return }
         openGeneration += 1
         let generation = openGeneration
@@ -216,6 +236,11 @@ final class ChatSessionViewModel: Identifiable {
     }
 
     private func performSend(_ text: String) async -> Bool {
+        if mode == .v1 { return performV1Send(text) }
+        return await performGatewaySend(text)
+    }
+
+    private func performGatewaySend(_ text: String) async -> Bool {
         submitInFlight = true
         defer { submitInFlight = false }
 
@@ -250,6 +275,110 @@ final class ChatSessionViewModel: Identifiable {
             appendErrorItem(message.isEmpty ? "Prompt failed" : message)
             return false
         }
+    }
+
+    // MARK: - v1 transport (OpenAI-compatible /v1/chat/completions)
+
+    /// v1 send: the API is stateless, so the full message history is replayed each
+    /// turn. Assistant text streams from `data:` chunks and tool rows from
+    /// `event: hermes.tool.progress`.
+    private func performV1Send(_ text: String) -> Bool {
+        submitInFlight = true
+        defer { submitInFlight = false }
+
+        items.append(TranscriptItem(id: nextItemID(prefix: "user"), kind: .user(text: text)))
+        let history = buildV1Messages()
+        beginTurn()
+        phase = .ready
+
+        v1StreamTask?.cancel()
+        v1StreamTask = Task { [weak self] in
+            await self?.consumeV1Stream(messages: history)
+        }
+        return true
+    }
+
+    /// Maps the transcript to OpenAI chat messages (user + finalized assistant text).
+    /// Tool / thinking / status / error items and the still-streaming turn are skipped;
+    /// the server maintains its own system prompt.
+    private func buildV1Messages() -> [V1Message] {
+        var messages: [V1Message] = []
+        for item in items {
+            switch item.kind {
+            case .user(let text):
+                messages.append(V1Message(role: "user", content: text))
+            case .assistant(let text, _):
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { messages.append(V1Message(role: "assistant", content: trimmed)) }
+            default:
+                break
+            }
+        }
+        return messages
+    }
+
+    private func consumeV1Stream(messages: [V1Message]) async {
+        do {
+            for try await event in v1.streamChat(model: v1ModelID, messages: messages) {
+                if interrupted { break }
+                switch event {
+                case .textDelta(let chunk):
+                    pendingAssistantDelta += chunk
+                    scheduleFlush()
+                case .toolProgress(let tool, let label, let status, let callID):
+                    flushDeltas()
+                    upsertV1Tool(tool: tool, label: label, callID: callID, completed: status == "completed")
+                case .usage:
+                    break
+                case .done:
+                    break
+                }
+            }
+            flushDeltas()
+            if !interrupted { finalizeV1Turn() }
+        } catch is CancellationError {
+            // interrupt() already settled the turn.
+        } catch {
+            flushDeltas()
+            if !interrupted { failTurn(error.localizedDescription) }
+        }
+        v1StreamTask = nil
+    }
+
+    /// Promotes the streamed assistant text to a finalized part and settles the turn.
+    private func finalizeV1Turn() {
+        for index in items.indices where currentTurnItemIDs.contains(items[index].id) {
+            if case .assistant(let text, true) = items[index].kind {
+                items[index].kind = .assistant(text: text, streaming: false)
+            }
+        }
+        settleTurn()
+    }
+
+    private func upsertV1Tool(tool: String, label: String?, callID: String?, completed: Bool) {
+        sawAssistantPayload = true
+        awaitingResponse = false
+        let toolID = callID ?? "v1-tool:\(tool)"
+        let context = (label?.isEmpty == false) ? label! : tool
+
+        if let index = items.firstIndex(where: { item in
+            if case .tool(let row) = item.kind { return row.toolID == toolID }
+            return false
+        }), case .tool(var row) = items[index].kind {
+            row.name = tool
+            if !context.isEmpty { row.context = context }
+            if completed { row.state = .success }
+            items[index].kind = .tool(row)
+            bumpRevision()
+            return
+        }
+
+        let row = ToolRowModel(toolID: toolID, name: tool, context: context,
+                               state: completed ? .success : .running)
+        let itemID = nextItemID(prefix: "tool")
+        items.append(TranscriptItem(id: itemID, kind: .tool(row)))
+        currentTurnItemIDs.insert(itemID)
+        bumpRevision()
     }
 
     /// First send on a draft: lazily create the backend session.
@@ -314,10 +443,26 @@ final class ChatSessionViewModel: Identifiable {
     // MARK: - Interrupt
 
     func interrupt() {
+        if mode == .v1 {
+            guard isBusy else { return }
+            interrupted = true
+            v1StreamTask?.cancel()
+            v1StreamTask = nil
+            finalizeInterrupt()
+            return
+        }
         guard let sid = liveSessionID else { return }
         interrupted = true
+        finalizeInterrupt()
+        let boot = self.boot
+        Task {
+            try? await boot.requestGateway("session.interrupt", params: ["session_id": .string(sid)])
+        }
+    }
+
+    /// Shared interrupt finalize: flush, drop empty streaming items, keep partial text.
+    private func finalizeInterrupt() {
         flushDeltas()
-        // Finalize locally: drop empty streaming items, keep partial text.
         items.removeAll { item in
             guard currentTurnItemIDs.contains(item.id) else { return false }
             if case .assistant(let text, true) = item.kind {
@@ -326,10 +471,6 @@ final class ChatSessionViewModel: Identifiable {
             return false
         }
         settleTurn()
-        let boot = self.boot
-        Task {
-            try? await boot.requestGateway("session.interrupt", params: ["session_id": .string(sid)])
-        }
     }
 
     // MARK: - Gateway events

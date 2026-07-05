@@ -10,6 +10,7 @@ struct GatewaySettingsView: View {
     @State private var restDraft = ""
     @State private var wsDraft = ""
     @State private var tokenDraft = ""
+    @State private var modeDraft: ConnectionMode = .v1
     @State private var validationError: String?
     @State private var didSave = false
     @State private var loadedDrafts = false
@@ -22,23 +23,41 @@ struct GatewaySettingsView: View {
             SettingsHairline()
                 .padding(.vertical, 14)
 
-            SettingsSectionHeader("REST API URL")
+            SettingsSectionHeader("Connection mode")
+                .padding(.bottom, 6)
+            Picker("", selection: $modeDraft) {
+                ForEach(ConnectionMode.allCases, id: \.self) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            footnote(modeDraft == .v1
+                ? "OpenAI-compatible /v1 API with a Bearer API key. Chat streams directly; sessions are kept on this device."
+                : "Hermes agent gateway (/api/* + /api/ws JSON-RPC). Full sessions/tools, but the current deployment is OAuth-gated.")
+
+            SettingsSectionHeader(modeDraft == .v1 ? "API base URL" : "REST API URL")
+                .padding(.top, 16)
                 .padding(.bottom, 6)
             TextField("", text: $restDraft, prompt: Text(ConnectionSettings.defaultRESTBaseURL))
                 .settingsFieldChrome(theme)
-            footnote("Base URL for all /api/* calls. Must be https://.")
+            footnote(modeDraft == .v1
+                ? "Base URL for /v1 and /health. Must be https://."
+                : "Base URL for all /api/* calls. Must be https://.")
 
-            SettingsSectionHeader("WebSocket URL")
+            if modeDraft == .gateway {
+                SettingsSectionHeader("WebSocket URL")
+                    .padding(.top, 16)
+                    .padding(.bottom, 6)
+                TextField("", text: $wsDraft, prompt: Text(ConnectionSettings.defaultWSURL))
+                    .settingsFieldChrome(theme)
+                footnote("Leave as-is unless the gateway moved — the two endpoints are independent. Must be wss://; leave empty to derive /api/ws from the REST base.")
+            }
+
+            SettingsSectionHeader(modeDraft.credentialLabel)
                 .padding(.top, 16)
                 .padding(.bottom, 6)
-            TextField("", text: $wsDraft, prompt: Text(ConnectionSettings.defaultWSURL))
-                .settingsFieldChrome(theme)
-            footnote("Leave as-is unless the gateway moved — the two endpoints are independent. Must be wss://; leave empty to derive /api/ws from the REST base.")
-
-            SettingsSectionHeader("Session token")
-                .padding(.top, 16)
-                .padding(.bottom, 6)
-            SecureField("", text: $tokenDraft, prompt: Text("Paste a token to replace the saved one"))
+            SecureField("", text: $tokenDraft, prompt: Text("Paste a \(modeDraft.credentialLabel.lowercased()) to replace the saved one"))
                 .settingsFieldChrome(theme)
             footnote(tokenStatusLabel)
 
@@ -65,6 +84,7 @@ struct GatewaySettingsView: View {
         .onChange(of: restDraft) { clearFeedback() }
         .onChange(of: wsDraft) { clearFeedback() }
         .onChange(of: tokenDraft) { clearFeedback() }
+        .onChange(of: modeDraft) { clearFeedback() }
     }
 
     // MARK: - Subviews
@@ -74,7 +94,7 @@ struct GatewaySettingsView: View {
             Circle()
                 .fill(stateColor)
                 .frame(width: 7, height: 7)
-            Text("Gateway: \(model.boot.gatewayState.rawValue)")
+            Text("Connection: \(connectionLabel)")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(theme.textSecondary)
             if didSave {
@@ -86,13 +106,14 @@ struct GatewaySettingsView: View {
         }
     }
 
+    private var connectionLabel: String {
+        if model.boot.isReady { return "ready" }
+        return model.boot.bootProgress.running ? "connecting" : "offline"
+    }
+
     private var stateColor: Color {
-        switch model.boot.gatewayState {
-        case .open: return theme.statusSuccess
-        case .connecting: return theme.statusWarning
-        case .closed, .error: return theme.statusError
-        case .idle: return theme.textTertiary
-        }
+        if model.boot.isReady { return theme.statusSuccess }
+        return model.boot.bootProgress.running ? theme.statusWarning : theme.statusError
     }
 
     private var tokenStatusLabel: String {
@@ -151,6 +172,7 @@ struct GatewaySettingsView: View {
         loadedDrafts = true
         restDraft = model.connectionStore.settings.restBaseURLString
         wsDraft = model.connectionStore.settings.wsURLString
+        modeDraft = model.connectionStore.settings.mode
     }
 
     private func clearFeedback() {
@@ -162,7 +184,8 @@ struct GatewaySettingsView: View {
         let draft = ConnectionSettings(
             restBaseURLString: restDraft.trimmingCharacters(in: .whitespacesAndNewlines),
             wsURLString: wsDraft.trimmingCharacters(in: .whitespacesAndNewlines),
-            authMode: .token
+            authMode: .token,
+            mode: modeDraft
         )
         let draftToken = tokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         let stored = model.connectionStore.token()
@@ -186,21 +209,24 @@ struct GatewaySettingsView: View {
             return
         }
 
-        let draft = ConnectionSettings(restBaseURLString: rest, wsURLString: ws, authMode: .token)
+        let draft = ConnectionSettings(restBaseURLString: rest, wsURLString: ws, authMode: .token, mode: modeDraft)
 
-        // Reference save-time coercion: a new non-empty token replaces the stored
+        // Reference save-time coercion: a new non-empty credential replaces the stored
         // secret, otherwise the existing one is inherited; neither → hard error.
         let effectiveToken = newToken.isEmpty ? (model.connectionStore.token() ?? "") : newToken
         guard !effectiveToken.isEmpty else {
-            validationError = "Remote gateway session token is required."
+            validationError = "\(modeDraft.credentialLabel) is required."
             return
         }
 
-        do {
-            _ = try draft.webSocketURL(token: effectiveToken)
-        } catch {
-            validationError = error.localizedDescription
-            return
+        // The WS URL only matters in gateway mode; validate it there.
+        if modeDraft == .gateway {
+            do {
+                _ = try draft.webSocketURL(token: effectiveToken)
+            } catch {
+                validationError = error.localizedDescription
+                return
+            }
         }
 
         model.connectionStore.settings = draft

@@ -11,6 +11,34 @@ enum AuthMode: String, Codable, Sendable {
     }
 }
 
+/// Which backend protocol the remote client speaks.
+///
+/// - `.v1`: the OpenAI-compatible inference API at `api-hermes.myrakilabs.com`
+///   (`POST /v1/chat/completions` with SSE, `Authorization: Bearer <key>`, `/health`).
+///   Sessions are client-side; the server streams assistant text plus
+///   `hermes.tool.progress` events.
+/// - `.gateway`: the Hermes agent gateway (`/api/*` REST + `/api/ws` JSON-RPC), which
+///   is OAuth-gated on the current deployment (static-token WS auth is rejected).
+enum ConnectionMode: String, Codable, Sendable, CaseIterable {
+    case v1
+    case gateway
+
+    var title: String {
+        switch self {
+        case .v1: return "OpenAI-compatible (/v1)"
+        case .gateway: return "Hermes gateway (/api/ws)"
+        }
+    }
+
+    /// What the stored credential is called in each mode.
+    var credentialLabel: String {
+        switch self {
+        case .v1: return "API key"
+        case .gateway: return "Session token"
+        }
+    }
+}
+
 /// The two independently configurable endpoints. This deliberately breaks the
 /// original's assumption that the WS URL derives from the REST base — the
 /// Cloudflare tunnel setup runs them on separate hostnames.
@@ -21,13 +49,17 @@ struct ConnectionSettings: Equatable, Sendable {
     /// e.g. `wss://hermes.myrakilabs.com/api/ws`. Empty = derive from the REST base.
     var wsURLString: String
     var authMode: AuthMode = .token
+    /// Which backend protocol to speak. Defaults to `.v1` (works against the
+    /// current api-hermes deployment); `.gateway` targets the OAuth-gated agent gateway.
+    var mode: ConnectionMode = .v1
 
     static let defaultRESTBaseURL = "https://api-hermes.myrakilabs.com"
     static let defaultWSURL = "wss://hermes.myrakilabs.com/api/ws"
 
     static let `default` = ConnectionSettings(
         restBaseURLString: defaultRESTBaseURL,
-        wsURLString: defaultWSURL
+        wsURLString: defaultWSURL,
+        mode: .v1
     )
 
     /// Replicates `normalizeRemoteBaseUrl`: trim; require http(s); strip query,

@@ -7,46 +7,39 @@ visual design, and chat/streaming behavior — with one deliberate architectural
 backend, and it has no local or SSH mode. It talks over the network to an
 already-running Hermes gateway exposed through Cloudflare tunnels.
 
-## The two-endpoint remote model
+## Two connection modes
 
-Unlike the original (which derives the WebSocket address from the REST base URL), this
-client configures the two endpoints **independently**:
+The client speaks two backend protocols, selected in **Settings → Gateway**:
 
-| Endpoint | Default | Carries |
-|---|---|---|
-| REST API | `https://api-hermes.myrakilabs.com` | all `/api/*` calls |
-| WebSocket gateway | `wss://hermes.myrakilabs.com/api/ws` | JSON-RPC 2.0 chat gateway (tunneled to backend port 9119) |
+| Mode | Default endpoint | Auth | What it gives you |
+|---|---|---|---|
+| **OpenAI-compatible `/v1`** (default) | `https://api-hermes.myrakilabs.com` | `Authorization: Bearer <API key>` | Streaming chat with the Hermes agent (`POST /v1/chat/completions`, SSE) incl. live `hermes.tool.progress` tool rows; `/health` connection check. Sessions are client-side. |
+| **Hermes gateway** | REST `https://api-hermes.myrakilabs.com` + WS `wss://hermes.myrakilabs.com/api/ws` | `X-Hermes-Session-Token` header + `?token=` WS param | The full agent gateway: server sessions, resume, tools, skills, JSON-RPC event streaming. **Note:** the current deployment runs gated (`auth_required: true`), which rejects static-token WS auth — this mode needs an ungated gateway or the OAuth/ws-ticket flow (a later phase). |
 
-Both are editable in **Settings → Gateway** and persisted in UserDefaults. Auth is a
-single static session token, stored **only in the macOS Keychain**:
+Unlike the original (which derives the WebSocket address from the REST base URL),
+gateway mode configures the two endpoints **independently**. Endpoints persist in
+UserDefaults; the credential (API key or session token) lives **only in the macOS
+Keychain**. Cloudflare terminates TLS, so the client enforces `https`/`wss` — no
+plain `http`/`ws`, no localhost fallback.
 
-- REST: sent as an `X-Hermes-Session-Token` header on every call.
-- WebSocket: appended as a URL-encoded `?token=` query parameter.
-
-Cloudflare terminates TLS, so the client enforces `https`/`wss` — no plain
-`http`/`ws`, no localhost fallback.
-
-### Before first run: verify the REST hostname
-
-The split-endpoint design only holds if the REST hostname genuinely serves the
-`/api/*` routes. Ten seconds of checking saves an afternoon of debugging:
+### Before first run: verify the endpoints
 
 ```sh
-curl -H "X-Hermes-Session-Token: <your-token>" https://api-hermes.myrakilabs.com/api/status
+curl https://api-hermes.myrakilabs.com/health          # → {"status": "ok", ...}   (v1 mode)
+curl https://hermes.myrakilabs.com/api/status           # → real JSON               (gateway mode)
 ```
 
-Real JSON back means you're clear. HTML or a 404 means that hostname isn't wired to
-the REST service — the WebSocket will connect fine while every REST call quietly
-fails.
+An HTML page or 404 means that hostname isn't wired to the service you expect —
+catch it in ten seconds instead of an afternoon.
 
 ## Configure
 
-1. Launch the app. With no token saved it boots into the connection-error card.
+1. Launch the app. With no credential saved it boots into the connection-error card.
 2. Open **Settings → Gateway** (⌘, or the "Open Settings…" button).
-3. Confirm the two endpoint URLs (pre-filled with the defaults above), paste your
-   session token, and hit **Test connection** — it exercises both the REST endpoint
-   and the real WebSocket transport (HTTP-only success is a documented false
-   positive in the original, so the test requires both).
+3. Pick the connection mode, confirm the endpoint URL(s), paste your API key (or
+   session token in gateway mode), and hit **Test connection** — v1 mode checks
+   `/health` and validates the key against `/v1/models`; gateway mode exercises both
+   the REST endpoint and the real WebSocket transport.
 4. **Save & Reconnect.**
 
 ## Build & run

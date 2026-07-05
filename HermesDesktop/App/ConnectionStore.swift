@@ -9,6 +9,7 @@ final class ConnectionStore {
     enum Keys {
         static let restBaseURL = "connection.restBaseURL"
         static let wsURL = "connection.wsURL"
+        static let mode = "connection.mode"
     }
 
     private let defaults: UserDefaults
@@ -25,13 +26,15 @@ final class ConnectionStore {
         self.keychain = keychain
         self.settings = ConnectionSettings(
             restBaseURLString: defaults.string(forKey: Keys.restBaseURL) ?? ConnectionSettings.defaultRESTBaseURL,
-            wsURLString: defaults.string(forKey: Keys.wsURL) ?? ConnectionSettings.defaultWSURL
+            wsURLString: defaults.string(forKey: Keys.wsURL) ?? ConnectionSettings.defaultWSURL,
+            mode: defaults.string(forKey: Keys.mode).flatMap(ConnectionMode.init) ?? .v1
         )
         self.tokenPresent = ((try? keychain.read()) ?? nil)?.isEmpty == false
     }
 
     private func persist() {
         defaults.set(settings.restBaseURLString, forKey: Keys.restBaseURL)
+        defaults.set(settings.mode.rawValue, forKey: Keys.mode)
         // Token-hygiene backstop: never let a query string (which could carry ?token=)
         // reach UserDefaults, even if a raw URL slipped past the settings form.
         defaults.set(Self.strippedOfQuery(settings.wsURLString), forKey: Keys.wsURL)

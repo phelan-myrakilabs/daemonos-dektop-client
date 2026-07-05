@@ -24,6 +24,10 @@ final class ChatCoordinator {
     }
 
     var gatewayState: GatewayConnectionState { model.boot.gatewayState }
+    /// Unified transport readiness (v1 health or gateway open) — drives composer state.
+    var isReady: Bool { model.boot.isReady }
+
+    private var mode: ConnectionMode { model.connectionStore.settings.mode }
 
     func openSession(_ session: SessionInfo) {
         activeSessionID = session.id
@@ -36,7 +40,7 @@ final class ChatCoordinator {
             }
             return
         }
-        let viewModel = ChatSessionViewModel(session: session, rest: model.rest, boot: model.boot)
+        let viewModel = makeViewModel(session: session)
         configure(viewModel)
         sessionViewModels[session.id] = viewModel
         activeViewModel = viewModel
@@ -45,10 +49,19 @@ final class ChatCoordinator {
 
     /// Clears to a local draft — no RPC until the first send (reference behavior).
     func startNewSession() {
-        let viewModel = ChatSessionViewModel(rest: model.rest, boot: model.boot)
+        let viewModel = makeViewModel(session: nil)
         configure(viewModel)
         activeViewModel = viewModel
         activeSessionID = nil
+    }
+
+    private func makeViewModel(session: SessionInfo?) -> ChatSessionViewModel {
+        if let session {
+            return ChatSessionViewModel(session: session, rest: model.rest, boot: model.boot,
+                                        v1: model.v1, mode: mode, v1ModelID: AppModel.defaultV1Model)
+        }
+        return ChatSessionViewModel(rest: model.rest, boot: model.boot,
+                                    v1: model.v1, mode: mode, v1ModelID: AppModel.defaultV1Model)
     }
 
     // MARK: - Wiring

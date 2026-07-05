@@ -42,6 +42,56 @@ final class ConnectionTester {
         phase = .running
         detail = nil
 
+        let trimmedDraft = draftToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = trimmedDraft.isEmpty ? (storedToken ?? "") : trimmedDraft
+
+        switch settings.mode {
+        case .v1:
+            await runV1(settings: settings, token: token)
+        case .gateway:
+            await runGateway(settings: settings, draftToken: draftToken, storedToken: storedToken)
+        }
+    }
+
+    // MARK: - v1
+
+    /// v1 test: `GET /health` (unauthenticated), then `GET /v1/models` with the key.
+    private func runV1(settings: ConnectionSettings, token: String) async {
+        let restBase: URL
+        do {
+            restBase = try ConnectionSettings.normalizeRESTBaseURL(settings.restBaseURLString)
+        } catch {
+            phase = .failure("Health failed: \(error.localizedDescription)")
+            return
+        }
+        let client = V1ChatClient(baseURLProvider: { restBase }, tokenProvider: { token.isEmpty ? nil : token })
+
+        let health: V1HealthResponse
+        do {
+            health = try await client.health()
+        } catch {
+            phase = .failure("Health check failed: \(error.localizedDescription)")
+            return
+        }
+        let healthLabel = Self.restStageLabel(version: health.version, name: "Health ok")
+
+        guard !token.isEmpty else {
+            detail = "\(healthLabel) · API key skipped (none saved)"
+            phase = .success(version: health.version)
+            return
+        }
+        do {
+            let models = try await client.models()
+            detail = "\(healthLabel) · API key ok (\(models.count) model\(models.count == 1 ? "" : "s"))"
+            phase = .success(version: health.version)
+        } catch {
+            phase = .failure("\(healthLabel) · API key rejected: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Gateway
+
+    private func runGateway(settings: ConnectionSettings, draftToken: String, storedToken: String?) async {
         // Stage 1 — REST: credential-free status probe against the draft base URL.
         let restBase: URL
         do {
@@ -95,10 +145,10 @@ final class ConnectionTester {
         }
     }
 
-    private static func restStageLabel(version: String?) -> String {
-        guard let version, !version.isEmpty else { return "REST ok" }
+    private static func restStageLabel(version: String?, name: String = "REST ok") -> String {
+        guard let version, !version.isEmpty else { return name }
         let display = version.lowercased().hasPrefix("v") ? version : "v\(version)"
-        return "REST ok (\(display))"
+        return "\(name) (\(display))"
     }
 
     /// Probes the real `/api/ws` transport. Success = `.opened` within 10 s and no

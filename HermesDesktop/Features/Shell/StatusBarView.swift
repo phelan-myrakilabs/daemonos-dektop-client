@@ -85,18 +85,14 @@ struct StatusBarView: View {
     }
 
     private var gatewayStatus: (detail: String, tint: Color?, icon: String) {
-        switch model.boot.gatewayState {
-        case .open:
+        // Mode-agnostic: v1 readiness (health OK) or gateway open both read as "ready".
+        if model.boot.isReady {
             return ("ready", nil, "waveform.path.ecg") // Lucide `Activity`
-        case .connecting:
-            return ("connecting", theme.statusWarning, "exclamationmark.circle") // Lucide `AlertCircle`
-        case .idle:
-            return model.boot.bootProgress.running
-                ? ("connecting", theme.statusWarning, "exclamationmark.circle")
-                : ("offline", theme.statusError, "exclamationmark.circle")
-        case .closed, .error:
-            return ("offline", theme.statusError, "exclamationmark.circle")
         }
+        if model.boot.bootProgress.running {
+            return ("connecting", theme.statusWarning, "exclamationmark.circle") // Lucide `AlertCircle`
+        }
+        return ("offline", theme.statusError, "exclamationmark.circle")
     }
 
     // MARK: - Session timer

@@ -26,10 +26,10 @@ struct ComposerView: View {
     // MARK: - Body
 
     private func composerBody(viewModel: ChatSessionViewModel, text: Binding<String>) -> some View {
-        // Submit is gated on the gateway being open, but the field stays EDITABLE
-        // while reconnecting so a draft can be typed (reference: disabled blocks
-        // Enter-submit only).
-        let submitDisabled = coordinator.gatewayState != .open
+        // Submit is gated on transport readiness, but the field stays EDITABLE while
+        // connecting so a draft can be typed (reference: disabled blocks Enter-submit
+        // only).
+        let submitDisabled = !coordinator.isReady
         return HStack(alignment: .bottom, spacing: 4) {
             attachMenu
                 .padding(.bottom, 3)
@@ -42,6 +42,8 @@ struct ComposerView: View {
                 .lineLimit(1...8)
                 .focused($inputFocused)
                 .padding(.vertical, 5)
+                .onAppear { focusSoon() }
+                .onChange(of: coordinator.activeSessionID) { focusSoon() }
                 .onKeyPress(keys: [.return], phases: .down) { press in
                     // Shift+Enter → let the field insert a newline at the caret.
                     if press.modifiers.contains(.shift) { return .ignored }
@@ -78,6 +80,13 @@ struct ComposerView: View {
         .padding(.top, 8)
         .padding(.bottom, 10)
         .opacity(submitDisabled ? 0.85 : 1)
+    }
+
+    // MARK: - Actions
+
+    /// Focus the input on the next runloop tick (the field must exist first).
+    private func focusSoon() {
+        DispatchQueue.main.async { inputFocused = true }
     }
 
     // MARK: - Controls
@@ -190,13 +199,8 @@ struct ComposerView: View {
     ]
 
     private func placeholder(for viewModel: ChatSessionViewModel) -> String {
-        switch coordinator.gatewayState {
-        case .connecting:
-            return "Starting Hermes..."
-        case .closed, .error:
-            return "Reconnecting to Hermes…"
-        case .idle, .open:
-            break
+        guard coordinator.isReady else {
+            return "Connecting to Hermes…"
         }
         let pool = viewModel.isDraft ? Self.newSessionPlaceholders : Self.existingSessionPlaceholders
         // Stable pick per conversation (re-rolled only on genuine session change).
