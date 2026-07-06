@@ -7,6 +7,7 @@ enum ShellRoute: Equatable {
     case chat
     case skillsTools
     case messaging
+    case artifacts
 }
 
 /// Shared shell chrome state: sidebar visibility (⌘B / titlebar toggle),
@@ -124,6 +125,8 @@ struct ShellRootView: View {
             SkillsToolsView()
         case .messaging:
             MessagingView()
+        case .artifacts:
+            ArtifactsView()
         case .chat:
             chatContent
         }

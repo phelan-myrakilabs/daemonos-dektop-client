@@ -53,8 +53,10 @@ struct SidebarView: View {
             SidebarNavRow(icon: "bubble.left", label: "Messaging") {
                 shell.route = .messaging
             }
-            // codicon `files` — Phase 2 route /artifacts
-            SidebarNavRow(icon: "doc.on.doc", label: "Artifacts", disabled: true) {}
+            // codicon `files`
+            SidebarNavRow(icon: "doc.on.doc", label: "Artifacts") {
+                shell.route = .artifacts
+            }
         }
         .padding(.bottom, 8)
     }
