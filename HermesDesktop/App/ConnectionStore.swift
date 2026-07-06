@@ -13,23 +13,32 @@ final class ConnectionStore {
     }
 
     private let defaults: UserDefaults
-    private let keychain: KeychainTokenStore
+    /// Shared token cache — the REST/WS clients read from this too, so the Keychain
+    /// is touched at most once per launch (not per request).
+    let tokenCache: TokenCache
 
     var settings: ConnectionSettings {
         didSet { persist() }
     }
 
-    private(set) var tokenPresent: Bool
+    /// Bumped by setToken so `tokenPreview`/`needsSetup` re-read the cache; the
+    /// Keychain is not read at init (avoids a blocking read / prompt on launch).
+    private var tokenRevision = 0
 
-    init(defaults: UserDefaults = .standard, keychain: KeychainTokenStore = KeychainTokenStore()) {
+    init(defaults: UserDefaults = .standard, tokenCache: TokenCache = TokenCache()) {
         self.defaults = defaults
-        self.keychain = keychain
+        self.tokenCache = tokenCache
         self.settings = ConnectionSettings(
             restBaseURLString: defaults.string(forKey: Keys.restBaseURL) ?? ConnectionSettings.defaultRESTBaseURL,
             wsURLString: defaults.string(forKey: Keys.wsURL) ?? ConnectionSettings.defaultWSURL,
             mode: defaults.string(forKey: Keys.mode).flatMap(ConnectionMode.init) ?? .v1
         )
-        self.tokenPresent = ((try? keychain.read()) ?? nil)?.isEmpty == false
+    }
+
+    /// Whether a token is saved. Reads the cache lazily (first access loads once).
+    var tokenPresent: Bool {
+        _ = tokenRevision // observation dependency so UI refreshes after setToken
+        return tokenCache.isPresent
     }
 
     private func persist() {
@@ -51,18 +60,13 @@ final class ConnectionStore {
     var needsSetup: Bool { !tokenPresent }
 
     func token() -> String? {
-        (try? keychain.read()) ?? nil
+        _ = tokenRevision
+        return tokenCache.current()
     }
 
     func setToken(_ token: String?) throws {
-        let trimmed = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if trimmed.isEmpty {
-            try keychain.delete()
-            tokenPresent = false
-        } else {
-            try keychain.write(trimmed)
-            tokenPresent = true
-        }
+        try tokenCache.set(token)
+        tokenRevision &+= 1
     }
 
     /// Reference `tokenPreview`: empty → nil; length <= 8 → "set"; else "...{last 6}".

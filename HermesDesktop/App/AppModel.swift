@@ -22,15 +22,14 @@ final class AppModel {
 
         // The REST providers read persisted state directly (UserDefaults/Keychain are
         // thread-safe) so the client stays usable off the main actor.
+        let tokenCache = connectionStore.tokenCache
         let rest = HermesRESTClient(
             baseURLProvider: {
                 let raw = UserDefaults.standard.string(forKey: ConnectionStore.Keys.restBaseURL)
                     ?? ConnectionSettings.defaultRESTBaseURL
                 return try ConnectionSettings.normalizeRESTBaseURL(raw)
             },
-            tokenProvider: {
-                (try? KeychainTokenStore().read()) ?? nil
-            }
+            tokenProvider: { tokenCache.current() }
         )
         self.rest = rest
 
@@ -45,9 +44,7 @@ final class AppModel {
                     ?? ConnectionSettings.defaultRESTBaseURL
                 return try ConnectionSettings.normalizeRESTBaseURL(raw)
             },
-            tokenProvider: {
-                (try? KeychainTokenStore().read()) ?? nil
-            },
+            tokenProvider: { tokenCache.current() },
             session: URLSession(configuration: streamConfig)
         )
 
