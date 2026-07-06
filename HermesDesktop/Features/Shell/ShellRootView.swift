@@ -6,6 +6,7 @@ import Observation
 enum ShellRoute: Equatable {
     case chat
     case skillsTools
+    case messaging
 }
 
 /// Shared shell chrome state: sidebar visibility (⌘B / titlebar toggle),
@@ -121,6 +122,8 @@ struct ShellRootView: View {
         switch shell.route {
         case .skillsTools:
             SkillsToolsView()
+        case .messaging:
+            MessagingView()
         case .chat:
             chatContent
         }

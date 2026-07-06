@@ -49,8 +49,10 @@ struct SidebarView: View {
             SidebarNavRow(icon: "wand.and.stars", label: "Skills & Tools") {
                 shell.route = .skillsTools
             }
-            // codicon `comment` — Phase 2 route /messaging
-            SidebarNavRow(icon: "bubble.left", label: "Messaging", disabled: true) {}
+            // codicon `comment`
+            SidebarNavRow(icon: "bubble.left", label: "Messaging") {
+                shell.route = .messaging
+            }
             // codicon `files` — Phase 2 route /artifacts
             SidebarNavRow(icon: "doc.on.doc", label: "Artifacts", disabled: true) {}
         }
